@@ -1,0 +1,55 @@
+[settings]
+auto_install = false
+
+[env]
+GOFLAGS = "-mod=readonly"
+
+[tasks.fmt]
+description = "Format Go code"
+run = "gofmt -w -s $(find . -name '*.go')"
+
+[tasks.fmt-check]
+description = "Check Go formatting (CI check)"
+run = """
+out=$(gofmt -l -s $(find . -name '*.go') 2>/dev/null)
+if [ -n "$out" ]; then echo "$out"; exit 1; fi
+"""
+
+[tasks.vet]
+description = "go vet (CI check)"
+run = "go vet ./..."
+
+[tasks.lint]
+description = "golangci-lint (CI check)"
+run = "golangci-lint run ./..."
+
+[tasks.test]
+description = "go test (unit tests only, no real server needed)"
+run = "go test ./... -race -count=1"
+
+[tasks.test-acceptance]
+description = "Run TF_ACC=1 acceptance tests against a real local dev server (requires FIREZONE_ENDPOINT/FIREZONE_TOKEN)"
+run = "TF_ACC=1 go test ./... -v"
+
+[tasks.build]
+description = "Build (CI check)"
+run = "go build -o terraform-provider-firezone ."
+
+[tasks.tfdocs]
+description = "Regenerate Terraform provider docs from schema"
+run = "go generate ./..."
+
+[tasks.tfdocs-check]
+description = "Fail if generated docs are out of date (CI check)"
+run = """
+go generate ./...
+if [ -n "$(git status --porcelain docs/ examples/)" ]; then
+  echo "docs/ is out of date - run 'mise run tfdocs' and commit the result" >&2
+  git status --porcelain docs/ examples/ >&2
+  exit 1
+fi
+"""
+
+[tasks.check]
+description = "Run all CI static analysis + unit test checks (matches CI)"
+depends = ["fmt-check", "vet", "lint", "test", "build"]

@@ -1,0 +1,11 @@
+# Looks up an Okta directory connection's id, for use as
+# firezone_group's directory_id - useful when a Group name is shared
+# across an unsynced Group and one or more synced directories.
+data "firezone_okta_directory" "corp" {
+  name = "Okta Directory"
+}
+
+data "firezone_group" "engineering_okta" {
+  name         = "Engineering"
+  directory_id = data.firezone_okta_directory.corp.id
+}
