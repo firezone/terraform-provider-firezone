@@ -29,11 +29,7 @@ provider "firezone" {
 }
 ```
 
-`endpoint` (or `FIREZONE_ENDPOINT`) is always the **bare API host**,
-never include a `/v1` or other version suffix. The provider's
-underlying `api-client` owns the version prefix internally, so bumping
-the targeted API version is a one-line change inside the client, not a
-config change every user's `.tf` file has to react to.
+`endpoint` (or `FIREZONE_ENDPOINT`) is always the **bare API host**.
 
 `token` (or `FIREZONE_TOKEN`) is the bearer token for an `api_client`
 actor, marked sensitive.

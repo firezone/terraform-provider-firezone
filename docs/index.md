@@ -31,5 +31,5 @@ provider "firezone" {
 
 ### Optional
 
-- `endpoint` (String) The bare Firezone API host, e.g. https://api.firezone.dev - do not include a version suffix like /v1, the provider adds it internally. Defaults to the FIREZONE_ENDPOINT environment variable.
+- `endpoint` (String) The bare Firezone API host, e.g. https://api.firezone.dev. Defaults to the FIREZONE_ENDPOINT environment variable.
 - `token` (String, Sensitive) Bearer token for an api_client actor. Defaults to the FIREZONE_TOKEN environment variable.
