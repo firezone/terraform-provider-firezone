@@ -5,13 +5,18 @@ package provider
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"strconv"
 
+	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	firezone "github.com/firezone/firezone-go"
@@ -30,8 +35,9 @@ type FirezoneProvider struct {
 // firezoneProviderModel mirrors the provider "firezone" { ... } config
 // block schema.
 type firezoneProviderModel struct {
-	Endpoint types.String `tfsdk:"endpoint"`
-	Token    types.String `tfsdk:"token"`
+	Endpoint   types.String `tfsdk:"endpoint"`
+	Token      types.String `tfsdk:"token"`
+	MaxRetries types.Int64  `tfsdk:"max_retries"`
 }
 
 // New returns a factory for the Firezone provider, for use with
@@ -62,6 +68,20 @@ func (p *FirezoneProvider) Schema(_ context.Context, _ provider.SchemaRequest, r
 				Sensitive: true,
 				Description: "Bearer token for an api_client actor. Defaults to the " +
 					"FIREZONE_TOKEN environment variable.",
+			},
+			"max_retries": schema.Int64Attribute{
+				Optional: true,
+				Description: "How many times to retry a request rate limited with HTTP 429. " +
+					"Waits honor the Retry-After header and add jitter. Defaults to the " +
+					"FIREZONE_MAX_RETRIES environment variable, then to the API client's " +
+					"own default. The API rate limits per account - roughly 20 requests of " +
+					"burst refilling at one per second - so a large apply or destroy at " +
+					"Terraform's default parallelism of 10 will be throttled; raise this, " +
+					"or lower parallelism with -parallelism=N, if operations still fail " +
+					"with 429.",
+				Validators: []validator.Int64{
+					int64validator.AtLeast(0),
+				},
 			},
 		},
 	}
@@ -109,7 +129,17 @@ func (p *FirezoneProvider) Configure(ctx context.Context, req provider.Configure
 		userAgent += "/" + p.version
 	}
 
-	client, err := firezone.NewClient(endpoint, token, firezone.WithUserAgent(userAgent))
+	opts := []firezone.Option{firezone.WithUserAgent(userAgent)}
+
+	maxRetries, ok := resolveMaxRetries(config.MaxRetries, &resp.Diagnostics)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if ok {
+		opts = append(opts, firezone.WithRetry(maxRetries > 0, maxRetries))
+	}
+
+	client, err := firezone.NewClient(endpoint, token, opts...)
 	if err != nil {
 		resp.Diagnostics.AddError("Unable to Create Firezone API Client", err.Error())
 		return
@@ -117,6 +147,32 @@ func (p *FirezoneProvider) Configure(ctx context.Context, req provider.Configure
 
 	resp.ResourceData = client
 	resp.DataSourceData = client
+}
+
+// resolveMaxRetries reads the retry budget from config, falling back to
+// FIREZONE_MAX_RETRIES. ok is false when neither is set, leaving the API
+// client on its own default rather than pinning it here - so the default
+// lives in exactly one place.
+func resolveMaxRetries(configured types.Int64, diags *diag.Diagnostics) (int, bool) {
+	if !configured.IsNull() && !configured.IsUnknown() {
+		return int(configured.ValueInt64()), true
+	}
+
+	raw := os.Getenv("FIREZONE_MAX_RETRIES")
+	if raw == "" {
+		return 0, false
+	}
+
+	parsed, err := strconv.Atoi(raw)
+	if err != nil || parsed < 0 {
+		diags.AddAttributeError(
+			path.Root("max_retries"),
+			"Invalid FIREZONE_MAX_RETRIES",
+			fmt.Sprintf("Expected a non-negative integer, got: %q", raw),
+		)
+		return 0, false
+	}
+	return parsed, true
 }
 
 // Resources implements provider.Provider.
