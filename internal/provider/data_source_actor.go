@@ -149,7 +149,7 @@ func (d *actorDataSource) Read(ctx context.Context, req datasource.ReadRequest, 
 	config.Email = types.StringValue(actor.Email)
 	config.Type = types.StringValue(string(actor.Type))
 	config.AllowEmailOTPSignIn = types.BoolValue(actor.AllowEmailOTPSignIn)
-	config.Enabled = types.BoolValue(!actor.IsDisabled())
+	config.Enabled = types.BoolValue(!actor.IsDisabled)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &config)...)
 }

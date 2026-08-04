@@ -220,5 +220,5 @@ func actorModelFromAPI(actor *firezone.Actor, model *actorResourceModel) {
 		model.Email = types.StringValue(actor.Email)
 	}
 	model.AllowEmailOTPSignIn = types.BoolValue(actor.AllowEmailOTPSignIn)
-	model.Enabled = types.BoolValue(!actor.IsDisabled())
+	model.Enabled = types.BoolValue(!actor.IsDisabled)
 }

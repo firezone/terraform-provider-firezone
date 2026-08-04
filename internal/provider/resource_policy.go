@@ -100,22 +100,40 @@ func (r *policyResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 					Attributes: map[string]schema.Attribute{
 						"property": schema.StringAttribute{
 							Required:    true,
-							Description: "One of remote_ip_location_region, remote_ip, auth_provider_id, client_verified.",
+							Description: "One of remote_ip_location_region, remote_ip, auth_provider_id, current_utc_datetime, client_verified.",
 							Validators: []validator.String{
-								stringvalidator.OneOf("remote_ip_location_region", "remote_ip", "auth_provider_id", "client_verified"),
+								stringvalidator.OneOf(
+									"remote_ip_location_region",
+									"remote_ip",
+									"auth_provider_id",
+									"current_utc_datetime",
+									"client_verified",
+								),
 							},
 						},
 						"operator": schema.StringAttribute{
-							Required:    true,
-							Description: "One of is_in, is_not_in, is_in_cidr, is_not_in_cidr, is. Which are valid depends on property.",
+							Required: true,
+							Description: "One of is_in, is_not_in, is_in_cidr, is_not_in_cidr, " +
+								"is_in_day_of_week_time_ranges, is. Which are valid depends on property.",
 							Validators: []validator.String{
-								stringvalidator.OneOf("is_in", "is_not_in", "is_in_cidr", "is_not_in_cidr", "is"),
+								stringvalidator.OneOf(
+									"is_in",
+									"is_not_in",
+									"is_in_cidr",
+									"is_not_in_cidr",
+									"is_in_day_of_week_time_ranges",
+									"is",
+								),
 							},
 						},
 						"values": schema.ListAttribute{
 							ElementType: types.StringType,
 							Required:    true,
-							Description: "Values to compare against, interpreted per property.",
+							Description: "Values to compare against, interpreted per property. For " +
+								"current_utc_datetime, each value is a \"DAY/TIME_RANGES/TIMEZONE\" string " +
+								"where DAY is one of M T W R F S U, TIME_RANGES is a comma-separated list " +
+								"of HH:MM-HH:MM ranges, and TIMEZONE is an IANA timezone name - e.g. " +
+								"\"M/09:00-17:00/America/New_York\". One value per day.",
 						},
 					},
 				},

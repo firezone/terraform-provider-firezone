@@ -15,10 +15,17 @@ import (
 )
 
 var (
-	_ resource.Resource                = &resourceResource{}
-	_ resource.ResourceWithImportState = &resourceResource{}
-	_ resource.ResourceWithConfigure   = &resourceResource{}
+	_ resource.Resource                   = &resourceResource{}
+	_ resource.ResourceWithImportState    = &resourceResource{}
+	_ resource.ResourceWithConfigure      = &resourceResource{}
+	_ resource.ResourceWithValidateConfig = &resourceResource{}
 )
+
+// resourceTypeStaticDevicePool is the one Resource type that is not
+// attached to a Site. The API nulls site_id for it server-side, so the
+// provider has to treat site_id as forbidden rather than required here
+// - see ValidateConfig.
+const resourceTypeStaticDevicePool = "static_device_pool"
 
 // NewResourceResource returns a new firezone_resource resource
 // instance, for use with FirezoneProvider.Resources.
@@ -65,8 +72,9 @@ func (r *resourceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 				},
 			},
 			"site_id": schema.StringAttribute{
-				Required:    true,
-				Description: "ID of the Site this Resource belongs to.",
+				Optional: true,
+				Description: "ID of the Site this Resource belongs to. Required for every type " +
+					"except static_device_pool, which is not attached to a Site and must omit it.",
 			},
 			"name": schema.StringAttribute{
 				Required:    true,
@@ -117,6 +125,51 @@ func (r *resourceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 				},
 			},
 		},
+	}
+}
+
+// ValidateConfig enforces the API's conditional requirement on site_id:
+// required for every Resource type except static_device_pool, which is
+// not attached to a Site at all.
+//
+// This can't be expressed with a plain Required/Optional flag, and it
+// matters in both directions. Omitting site_id on a normal Resource is
+// a 422 at apply time. Setting it on a static_device_pool is worse: the
+// API silently discards it, so the apply succeeds while state records a
+// Site the server never stored.
+func (r *resourceResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var config resourceResourceModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// Either value can come from an expression that isn't resolved until
+	// apply. Defer rather than guess - the API still enforces this.
+	if config.Type.IsUnknown() || config.SiteID.IsUnknown() {
+		return
+	}
+
+	isPool := config.Type.ValueString() == resourceTypeStaticDevicePool
+	hasSiteID := !config.SiteID.IsNull()
+
+	switch {
+	case isPool && hasSiteID:
+		resp.Diagnostics.AddAttributeError(
+			siteIDPath,
+			"Invalid Attribute Combination",
+			"site_id must be omitted when type is \""+resourceTypeStaticDevicePool+"\". "+
+				"A static device pool is not attached to a Site, and the API discards any "+
+				"site_id sent with one - leaving Terraform state holding a Site the server "+
+				"does not have.",
+		)
+	case !isPool && !hasSiteID:
+		resp.Diagnostics.AddAttributeError(
+			siteIDPath,
+			"Missing Required Attribute",
+			"site_id is required when type is \""+config.Type.ValueString()+"\". "+
+				"Only \""+resourceTypeStaticDevicePool+"\" Resources omit it.",
+		)
 	}
 }
 
@@ -240,8 +293,7 @@ func (r *resourceResource) ImportState(ctx context.Context, req resource.ImportS
 }
 
 // resourceModelFromAPI populates model's read-back fields from an API
-// *firezone.Resource, leaving fields the caller already set (SiteID on
-// create) as-is when the API doesn't echo them back on this response.
+// *firezone.Resource.
 func resourceModelFromAPI(ctx context.Context, res *firezone.Resource, model *resourceResourceModel) (diags fwDiagnostics) {
 	model.ID = types.StringValue(res.ID)
 	model.Name = types.StringValue(res.Name)
@@ -261,7 +313,15 @@ func resourceModelFromAPI(ctx context.Context, res *firezone.Resource, model *re
 	} else {
 		model.IPStack = types.StringValue(string(res.IPStack))
 	}
-	if res.SiteID != "" {
+	// The API omits site_id for Resources that have none - i.e.
+	// static_device_pool, which it detaches from any Site server-side.
+	// Map that to an explicit null instead of keeping whatever the
+	// caller planned, so state reflects the server rather than the
+	// config. ValidateConfig already rejects the combination that would
+	// make this a surprise.
+	if res.SiteID == "" {
+		model.SiteID = types.StringNull()
+	} else {
 		model.SiteID = types.StringValue(res.SiteID)
 	}
 
