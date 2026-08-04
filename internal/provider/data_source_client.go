@@ -67,17 +67,14 @@ func (d *clientDataSource) Schema(_ context.Context, _ datasource.SchemaRequest,
 				Computed: true,
 				Description: "Client name, as shown in the dashboard. Set exactly one of id, " +
 					"name, or firezone_id. Client names are not unique - the lookup fails if " +
-					"more than one matches. Lookup by name paginates every Client in the " +
-					"account client-side, since the API has no filter parameters on this " +
-					"endpoint; prefer id for large accounts.",
+					"more than one matches.",
 			},
 			"firezone_id": schema.StringAttribute{
 				Optional: true,
 				Computed: true,
 				Description: "The device's stable Firezone ID. Set exactly one of id, name, or " +
-					"firezone_id. Unlike name, this is unique per device and survives a " +
-					"rename, which makes it the better key for a long-lived config. Carries " +
-					"the same client-side pagination cost as name.",
+					"firezone_id. Unlike name, this survives a rename, which makes it the " +
+					"better key for a long-lived config.",
 			},
 			"actor_id": schema.StringAttribute{
 				Computed:    true,
@@ -161,24 +158,24 @@ func (d *clientDataSource) lookup(ctx context.Context, config clientDataSourceMo
 		return device, diags
 	}
 
-	// Neither name nor firezone_id has a server-side filter, so both
-	// scan the full Client list. Describing the search in one place
-	// keeps the two error messages consistent.
+	// Both lookups filter server-side. Neither key is unique, so the
+	// result still needs the 0/1/many handling below - the filter only
+	// removes the client-side scan, not the ambiguity.
 	var (
 		attribute string
 		wanted    string
-		match     func(firezone.ClientDevice) bool
+		opts      firezone.ClientListOptions
 	)
 	if name := config.Name.ValueString(); name != "" {
 		attribute, wanted = "name", name
-		match = func(c firezone.ClientDevice) bool { return c.Name == name }
+		opts.Name = name
 	} else {
 		firezoneID := config.FirezoneID.ValueString()
 		attribute, wanted = "firezone_id", firezoneID
-		match = func(c firezone.ClientDevice) bool { return c.FirezoneID == firezoneID }
+		opts.FirezoneID = firezoneID
 	}
 
-	matches, err := findClientDevices(ctx, d.client, match)
+	matches, err := findClientDevices(ctx, d.client, opts)
 	if err != nil {
 		diags.AddError("Error Reading Client", err.Error())
 		return nil, diags
@@ -203,25 +200,20 @@ func (d *clientDataSource) lookup(ctx context.Context, config clientDataSourceMo
 	}
 }
 
-// findClientDevices paginates the full Client list, collecting every
-// device satisfying match. The clients endpoint has no filter
-// parameters at all - not by name, actor, or firezone_id - so every
-// non-id lookup is a full scan. Acceptable for a data source read once
-// per plan; it is not a hot path.
-func findClientDevices(ctx context.Context, client *firezone.Client, match func(firezone.ClientDevice) bool) ([]firezone.ClientDevice, error) {
+// findClientDevices returns every Client matching opts' filters. The API
+// does the matching, so this normally makes a single request - it still
+// loops pages only because neither name nor firezone_id is unique, and
+// enough matches could in principle span a page.
+func findClientDevices(ctx context.Context, client *firezone.Client, opts firezone.ClientListOptions) ([]firezone.ClientDevice, error) {
 	var matches []firezone.ClientDevice
 
-	opts := &firezone.ListOptions{Limit: 100}
+	opts.Limit = 100
 	for {
-		page, err := client.ClientDevices.List(ctx, opts)
+		page, err := client.ClientDevices.List(ctx, &opts)
 		if err != nil {
 			return nil, err
 		}
-		for _, device := range page.Data {
-			if match(device) {
-				matches = append(matches, device)
-			}
-		}
+		matches = append(matches, page.Data...)
 		if page.Metadata.NextPage == "" {
 			return matches, nil
 		}

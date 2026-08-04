@@ -15,16 +15,20 @@ import (
 	firezone "github.com/firezone/firezone-go"
 )
 
-// newClientsListServer stands up an httptest server that serves the
-// given Clients from GET /clients, one page per call, so the pagination
-// loop in findClientDevices is actually exercised rather than assumed.
-func newClientsListServer(t *testing.T, pages [][]map[string]any) *firezone.Client {
+// newClientsListServer stands up an httptest server serving the given
+// Clients from GET /clients, one page per call, and records the query
+// string of every request so tests can assert the filters actually
+// reached the wire.
+func newClientsListServer(t *testing.T, pages [][]map[string]any, queries *[]string) *firezone.Client {
 	t.Helper()
 
 	var served int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/clients" {
 			t.Errorf("unexpected request path %q, want /clients", r.URL.Path)
+		}
+		if queries != nil {
+			*queries = append(*queries, r.URL.Query().Encode())
 		}
 
 		data := []map[string]any{}
@@ -52,64 +56,81 @@ func newClientsListServer(t *testing.T, pages [][]map[string]any) *firezone.Clie
 	return client
 }
 
-func TestFindClientDevices(t *testing.T) {
-	pages := [][]map[string]any{
-		{
-			{"id": "client-1", "name": "jane-laptop", "firezone_id": "fz-1"},
-			{"id": "client-2", "name": "shared-name", "firezone_id": "fz-2"},
-		},
-		{
-			{"id": "client-3", "name": "shared-name", "firezone_id": "fz-3"},
-		},
-	}
-
+// TestFindClientDevices_SendsFilters checks the lookup pushes its
+// filter to the API instead of scanning. The clients endpoint gained
+// name and firezone_id filters precisely so a data source read costs one
+// request rather than one per page of the account's devices.
+func TestFindClientDevices_SendsFilters(t *testing.T) {
 	tests := []struct {
-		name    string
-		match   func(firezone.ClientDevice) bool
-		wantIDs []string
+		name      string
+		opts      firezone.ClientListOptions
+		wantQuery string
 	}{
 		{
-			name:    "unique name",
-			match:   func(c firezone.ClientDevice) bool { return c.Name == "jane-laptop" },
-			wantIDs: []string{"client-1"},
+			name:      "by name",
+			opts:      firezone.ClientListOptions{Name: "jane-laptop"},
+			wantQuery: "limit=100&name=jane-laptop",
 		},
 		{
-			// Spans a page boundary: a matcher that stopped at the first
-			// page would find only one of these two.
-			name:    "duplicate name across pages",
-			match:   func(c firezone.ClientDevice) bool { return c.Name == "shared-name" },
-			wantIDs: []string{"client-2", "client-3"},
-		},
-		{
-			name:    "firezone_id on the second page",
-			match:   func(c firezone.ClientDevice) bool { return c.FirezoneID == "fz-3" },
-			wantIDs: []string{"client-3"},
-		},
-		{
-			name:    "no match",
-			match:   func(c firezone.ClientDevice) bool { return c.Name == "nonexistent" },
-			wantIDs: nil,
+			name:      "by firezone_id",
+			opts:      firezone.ClientListOptions{FirezoneID: "fz-1"},
+			wantQuery: "firezone_id=fz-1&limit=100",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			client := newClientsListServer(t, pages)
+			var queries []string
+			pages := [][]map[string]any{{{"id": "client-1", "name": "jane-laptop", "firezone_id": "fz-1"}}}
+			client := newClientsListServer(t, pages, &queries)
 
-			matches, err := findClientDevices(context.Background(), client, tt.match)
+			matches, err := findClientDevices(context.Background(), client, tt.opts)
 			if err != nil {
 				t.Fatalf("findClientDevices returned error: %v", err)
 			}
-
-			if len(matches) != len(tt.wantIDs) {
-				t.Fatalf("got %d matches, want %d (%v)", len(matches), len(tt.wantIDs), matches)
+			if len(matches) != 1 {
+				t.Fatalf("got %d matches, want 1", len(matches))
 			}
-			for i, want := range tt.wantIDs {
-				if matches[i].ID != want {
-					t.Errorf("matches[%d].ID = %q, want %q", i, matches[i].ID, want)
-				}
+			if len(queries) != 1 {
+				t.Fatalf("made %d requests, want 1 (%v)", len(queries), queries)
+			}
+			if queries[0] != tt.wantQuery {
+				t.Errorf("query = %q, want %q", queries[0], tt.wantQuery)
 			}
 		})
+	}
+}
+
+// TestFindClientDevices_Paginates covers the case the filter doesn't
+// remove: neither name nor firezone_id is unique, so matches can still
+// span pages and every one must be collected for the ambiguity check.
+func TestFindClientDevices_Paginates(t *testing.T) {
+	pages := [][]map[string]any{
+		{{"id": "client-1", "name": "shared-name"}},
+		{{"id": "client-2", "name": "shared-name"}},
+	}
+
+	var queries []string
+	client := newClientsListServer(t, pages, &queries)
+
+	matches, err := findClientDevices(context.Background(), client,
+		firezone.ClientListOptions{Name: "shared-name"})
+	if err != nil {
+		t.Fatalf("findClientDevices returned error: %v", err)
+	}
+
+	if len(matches) != 2 {
+		t.Fatalf("got %d matches, want 2 (%v)", len(matches), matches)
+	}
+	if matches[0].ID != "client-1" || matches[1].ID != "client-2" {
+		t.Errorf("matches = %v, want client-1 then client-2", matches)
+	}
+	// The second request must carry the cursor and keep the filter.
+	if len(queries) != 2 {
+		t.Fatalf("made %d requests, want 2 (%v)", len(queries), queries)
+	}
+	if queries[1] != "limit=100&name=shared-name&page_cursor=cursor-1" {
+		t.Errorf("second query = %q, want the cursor and the filter", queries[1])
 	}
 }
 
