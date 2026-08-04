@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
@@ -35,9 +36,10 @@ type FirezoneProvider struct {
 // firezoneProviderModel mirrors the provider "firezone" { ... } config
 // block schema.
 type firezoneProviderModel struct {
-	Endpoint   types.String `tfsdk:"endpoint"`
-	Token      types.String `tfsdk:"token"`
-	MaxRetries types.Int64  `tfsdk:"max_retries"`
+	Endpoint     types.String `tfsdk:"endpoint"`
+	Token        types.String `tfsdk:"token"`
+	MaxRetries   types.Int64  `tfsdk:"max_retries"`
+	RetryMaxWait types.Int64  `tfsdk:"retry_max_wait_seconds"`
 }
 
 // New returns a factory for the Firezone provider, for use with
@@ -81,6 +83,18 @@ func (p *FirezoneProvider) Schema(_ context.Context, _ provider.SchemaRequest, r
 					"with 429.",
 				Validators: []validator.Int64{
 					int64validator.AtLeast(0),
+				},
+			},
+			"retry_max_wait_seconds": schema.Int64Attribute{
+				Optional: true,
+				Description: "Caps how long any single rate-limit retry waits, in seconds. " +
+					"Waits escalate exponentially up to this cap and never drop below the " +
+					"Retry-After header. Defaults to the FIREZONE_RETRY_MAX_WAIT_SECONDS " +
+					"environment variable, then to the API client's own default of 30. " +
+					"Raising this buys more total patience than raising max_retries does, " +
+					"since a bigger cap lengthens every later attempt.",
+				Validators: []validator.Int64{
+					int64validator.AtLeast(1),
 				},
 			},
 		},
@@ -139,6 +153,14 @@ func (p *FirezoneProvider) Configure(ctx context.Context, req provider.Configure
 		opts = append(opts, firezone.WithRetry(maxRetries > 0, maxRetries))
 	}
 
+	retryMaxWait, ok := resolveRetryMaxWait(config.RetryMaxWait, &resp.Diagnostics)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if ok {
+		opts = append(opts, firezone.WithRetryMaxWait(retryMaxWait))
+	}
+
 	client, err := firezone.NewClient(endpoint, token, opts...)
 	if err != nil {
 		resp.Diagnostics.AddError("Unable to Create Firezone API Client", err.Error())
@@ -173,6 +195,32 @@ func resolveMaxRetries(configured types.Int64, diags *diag.Diagnostics) (int, bo
 		return 0, false
 	}
 	return parsed, true
+}
+
+// resolveRetryMaxWait reads the per-retry wait cap from config, falling
+// back to FIREZONE_RETRY_MAX_WAIT_SECONDS. As with resolveMaxRetries,
+// ok is false when neither is set so the API client keeps its own
+// default.
+func resolveRetryMaxWait(configured types.Int64, diags *diag.Diagnostics) (time.Duration, bool) {
+	if !configured.IsNull() && !configured.IsUnknown() {
+		return time.Duration(configured.ValueInt64()) * time.Second, true
+	}
+
+	raw := os.Getenv("FIREZONE_RETRY_MAX_WAIT_SECONDS")
+	if raw == "" {
+		return 0, false
+	}
+
+	parsed, err := strconv.Atoi(raw)
+	if err != nil || parsed < 1 {
+		diags.AddAttributeError(
+			path.Root("retry_max_wait_seconds"),
+			"Invalid FIREZONE_RETRY_MAX_WAIT_SECONDS",
+			fmt.Sprintf("Expected a positive integer number of seconds, got: %q", raw),
+		)
+		return 0, false
+	}
+	return time.Duration(parsed) * time.Second, true
 }
 
 // Resources implements provider.Provider.
