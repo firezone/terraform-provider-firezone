@@ -129,6 +129,7 @@ func (p *FirezoneProvider) Resources(_ context.Context) []func() resource.Resour
 		NewGroupMembershipResource,
 		NewActorResource,
 		NewGatewayResource,
+		NewPoolMemberResource,
 	}
 }
 

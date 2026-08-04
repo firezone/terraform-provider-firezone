@@ -31,6 +31,14 @@ var (
 // composite ID's site_id component.
 var siteIDPath = path.Root("site_id")
 
+// resourceIDPath and deviceIDPath are used by
+// firezone_pool_member.ImportState to set its two composite-ID
+// components individually.
+var (
+	resourceIDPath = path.Root("resource_id")
+	deviceIDPath   = path.Root("device_id")
+)
+
 // configureClient extracts the shared *firezone.Client from
 // providerData (resource.ConfigureRequest.ProviderData or
 // datasource.ConfigureRequest.ProviderData), appending a diagnostic and
