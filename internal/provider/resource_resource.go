@@ -27,6 +27,11 @@ var (
 // - see ValidateConfig.
 const resourceTypeStaticDevicePool = "static_device_pool"
 
+// resourceTypeDNS is the only Resource type ip_stack applies to. The
+// API defaults it to "dual" for dns Resources and enforces NULL for
+// every other type via a check constraint - see ValidateConfig.
+const resourceTypeDNS = "dns"
+
 // NewResourceResource returns a new firezone_resource resource
 // instance, for use with FirezoneProvider.Resources.
 func NewResourceResource() resource.Resource {
@@ -96,9 +101,11 @@ func (r *resourceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 				Description: "Human-readable description of the address.",
 			},
 			"ip_stack": schema.StringAttribute{
-				Optional:    true,
-				Computed:    true,
-				Description: "IP family constraint. One of ipv4_only, ipv6_only, dual.",
+				Optional: true,
+				Computed: true,
+				Description: "IP family constraint. One of ipv4_only, ipv6_only, dual. Applies " +
+					"only to dns Resources, where it defaults to dual; must be omitted for " +
+					"every other type.",
 				Validators: []validator.String{
 					stringvalidator.OneOf("ipv4_only", "ipv6_only", "dual"),
 				},
@@ -128,15 +135,21 @@ func (r *resourceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 	}
 }
 
-// ValidateConfig enforces the API's conditional requirement on site_id:
-// required for every Resource type except static_device_pool, which is
-// not attached to a Site at all.
+// ValidateConfig enforces the two attribute rules the API applies
+// conditionally on type, neither of which a Required/Optional flag can
+// express:
 //
-// This can't be expressed with a plain Required/Optional flag, and it
-// matters in both directions. Omitting site_id on a normal Resource is
-// a 422 at apply time. Setting it on a static_device_pool is worse: the
-// API silently discards it, so the apply succeeds while state records a
-// Site the server never stored.
+//   - site_id is required for every type except static_device_pool,
+//     which is not attached to a Site at all.
+//   - ip_stack applies only to dns Resources, and must be omitted for
+//     every other type.
+//
+// Both matter because the failure modes differ. Omitting site_id on a
+// normal Resource, or setting ip_stack on a non-dns one, is a 422 at
+// apply time - after other resources in the same apply have already
+// been created. Setting site_id on a static_device_pool is worse still:
+// the API silently discards it, so the apply succeeds while state
+// records a Site the server never stored.
 func (r *resourceResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
 	var config resourceResourceModel
 	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
@@ -144,31 +157,47 @@ func (r *resourceResource) ValidateConfig(ctx context.Context, req resource.Vali
 		return
 	}
 
-	// Either value can come from an expression that isn't resolved until
-	// apply. Defer rather than guess - the API still enforces this.
-	if config.Type.IsUnknown() || config.SiteID.IsUnknown() {
+	// type drives both rules, so nothing can be checked without it. It
+	// can come from an expression that isn't resolved until apply -
+	// defer rather than guess, since the API still enforces both.
+	if config.Type.IsUnknown() {
 		return
 	}
+	resourceType := config.Type.ValueString()
 
-	isPool := config.Type.ValueString() == resourceTypeStaticDevicePool
-	hasSiteID := !config.SiteID.IsNull()
+	if !config.SiteID.IsUnknown() {
+		isPool := resourceType == resourceTypeStaticDevicePool
+		hasSiteID := !config.SiteID.IsNull()
 
-	switch {
-	case isPool && hasSiteID:
+		switch {
+		case isPool && hasSiteID:
+			resp.Diagnostics.AddAttributeError(
+				siteIDPath,
+				"Invalid Attribute Combination",
+				"site_id must be omitted when type is \""+resourceTypeStaticDevicePool+"\". "+
+					"A static device pool is not attached to a Site, and the API discards any "+
+					"site_id sent with one - leaving Terraform state holding a Site the server "+
+					"does not have.",
+			)
+		case !isPool && !hasSiteID:
+			resp.Diagnostics.AddAttributeError(
+				siteIDPath,
+				"Missing Required Attribute",
+				"site_id is required when type is \""+resourceType+"\". "+
+					"Only \""+resourceTypeStaticDevicePool+"\" Resources omit it.",
+			)
+		}
+	}
+
+	// ip_stack has no "required" direction: the API defaults it to
+	// "dual" for dns Resources, so omitting it is always valid.
+	if !config.IPStack.IsUnknown() && !config.IPStack.IsNull() && resourceType != resourceTypeDNS {
 		resp.Diagnostics.AddAttributeError(
-			siteIDPath,
+			ipStackPath,
 			"Invalid Attribute Combination",
-			"site_id must be omitted when type is \""+resourceTypeStaticDevicePool+"\". "+
-				"A static device pool is not attached to a Site, and the API discards any "+
-				"site_id sent with one - leaving Terraform state holding a Site the server "+
-				"does not have.",
-		)
-	case !isPool && !hasSiteID:
-		resp.Diagnostics.AddAttributeError(
-			siteIDPath,
-			"Missing Required Attribute",
-			"site_id is required when type is \""+config.Type.ValueString()+"\". "+
-				"Only \""+resourceTypeStaticDevicePool+"\" Resources omit it.",
+			"ip_stack applies only to \""+resourceTypeDNS+"\" Resources and must be omitted "+
+				"when type is \""+resourceType+"\". The API enforces this with a check "+
+				"constraint and rejects the request outright.",
 		)
 	}
 }
@@ -298,7 +327,15 @@ func resourceModelFromAPI(ctx context.Context, res *firezone.Resource, model *re
 	model.ID = types.StringValue(res.ID)
 	model.Name = types.StringValue(res.Name)
 	model.Type = types.StringValue(string(res.Type))
-	model.Address = types.StringValue(res.Address)
+	// The API nulls address for types that don't have one -
+	// static_device_pool and internet. An Optional attribute the config
+	// left unset must read back as null, not "", or Terraform rejects
+	// the apply as an inconsistent result.
+	if res.Address == "" {
+		model.Address = types.StringNull()
+	} else {
+		model.Address = types.StringValue(res.Address)
+	}
 	if res.AddressDescription == "" {
 		model.AddressDescription = types.StringNull()
 	} else {

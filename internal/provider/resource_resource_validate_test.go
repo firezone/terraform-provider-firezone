@@ -33,6 +33,7 @@ func TestResourceResourceValidateConfig(t *testing.T) {
 		name        string
 		resType     tftypes.Value
 		siteID      tftypes.Value
+		ipStack     tftypes.Value
 		wantErr     bool
 		wantErrPart string
 	}{
@@ -75,10 +76,51 @@ func TestResourceResourceValidateConfig(t *testing.T) {
 			resType: tftypes.NewValue(tftypes.String, "static_device_pool"),
 			siteID:  tftypes.NewValue(tftypes.String, tftypes.UnknownValue),
 		},
+		{
+			name:    "dns with ip_stack is valid",
+			resType: tftypes.NewValue(tftypes.String, "dns"),
+			siteID:  tftypes.NewValue(tftypes.String, "site-1"),
+			ipStack: tftypes.NewValue(tftypes.String, "ipv4_only"),
+		},
+		{
+			name:    "dns without ip_stack is valid",
+			resType: tftypes.NewValue(tftypes.String, "dns"),
+			siteID:  tftypes.NewValue(tftypes.String, "site-1"),
+			ipStack: tftypes.NewValue(tftypes.String, nil),
+		},
+		{
+			// The API rejects this with a check-constraint 422 at apply
+			// time, after other resources in the same apply are created.
+			name:        "ip with ip_stack is rejected",
+			resType:     tftypes.NewValue(tftypes.String, "ip"),
+			siteID:      tftypes.NewValue(tftypes.String, "site-1"),
+			ipStack:     tftypes.NewValue(tftypes.String, "ipv4_only"),
+			wantErr:     true,
+			wantErrPart: "ip_stack applies only to",
+		},
+		{
+			name:        "static_device_pool with ip_stack is rejected",
+			resType:     tftypes.NewValue(tftypes.String, "static_device_pool"),
+			siteID:      tftypes.NewValue(tftypes.String, nil),
+			ipStack:     tftypes.NewValue(tftypes.String, "dual"),
+			wantErr:     true,
+			wantErrPart: "ip_stack applies only to",
+		},
+		{
+			name:    "unknown ip_stack defers validation",
+			resType: tftypes.NewValue(tftypes.String, "ip"),
+			siteID:  tftypes.NewValue(tftypes.String, "site-1"),
+			ipStack: tftypes.NewValue(tftypes.String, tftypes.UnknownValue),
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			ipStack := tt.ipStack
+			if ipStack.IsNull() && ipStack.Type() == nil {
+				ipStack = tftypes.NewValue(tftypes.String, nil)
+			}
+
 			raw := tftypes.NewValue(objType, map[string]tftypes.Value{
 				"id":                  tftypes.NewValue(tftypes.String, nil),
 				"site_id":             tt.siteID,
@@ -86,7 +128,7 @@ func TestResourceResourceValidateConfig(t *testing.T) {
 				"type":                tt.resType,
 				"address":             tftypes.NewValue(tftypes.String, nil),
 				"address_description": tftypes.NewValue(tftypes.String, nil),
-				"ip_stack":            tftypes.NewValue(tftypes.String, nil),
+				"ip_stack":            ipStack,
 				"filters":             tftypes.NewValue(objType.AttributeTypes["filters"], nil),
 			})
 

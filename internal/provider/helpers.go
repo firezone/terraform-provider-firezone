@@ -39,6 +39,10 @@ var (
 	deviceIDPath   = path.Root("device_id")
 )
 
+// ipStackPath is used by firezone_resource.ValidateConfig to attribute
+// its type-conditional ip_stack error.
+var ipStackPath = path.Root("ip_stack")
+
 // configureClient extracts the shared *firezone.Client from
 // providerData (resource.ConfigureRequest.ProviderData or
 // datasource.ConfigureRequest.ProviderData), appending a diagnostic and
