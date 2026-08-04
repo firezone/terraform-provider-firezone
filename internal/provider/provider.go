@@ -139,6 +139,7 @@ func (p *FirezoneProvider) DataSources(_ context.Context) []func() datasource.Da
 		NewSiteDataSource,
 		NewGroupDataSource,
 		NewActorDataSource,
+		NewClientDataSource,
 		NewEntraDirectoryDataSource,
 		NewGoogleDirectoryDataSource,
 		NewOktaDirectoryDataSource,
