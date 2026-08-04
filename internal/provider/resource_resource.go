@@ -362,7 +362,9 @@ func resourceModelFromAPI(ctx context.Context, res *firezone.Resource, model *re
 		model.SiteID = types.StringValue(res.SiteID)
 	}
 
-	filters, filterDiags := filtersToModel(ctx, res.Filters)
+	// Pass the planned/prior filters in so ports can tell an omitted
+	// argument from an explicit empty list - see portsToModel.
+	filters, filterDiags := filtersToModel(ctx, res.Filters, model.Filters)
 	diags.Append(filterDiags...)
 	model.Filters = filters
 
@@ -383,11 +385,14 @@ func filtersFromModel(ctx context.Context, filters []resourceFilterModel) ([]fir
 	return result, diags
 }
 
-func filtersToModel(ctx context.Context, filters []firezone.Filter) ([]resourceFilterModel, fwDiagnostics) {
+// filtersToModel maps the API's filters back into the model. prior is
+// the planned (on create/update) or stored (on read) filter list, used
+// only to disambiguate empty ports - see portsToModel.
+func filtersToModel(ctx context.Context, filters []firezone.Filter, prior []resourceFilterModel) ([]resourceFilterModel, fwDiagnostics) {
 	var diags fwDiagnostics
 	result := make([]resourceFilterModel, 0, len(filters))
-	for _, f := range filters {
-		ports, portDiags := types.ListValueFrom(ctx, types.StringType, f.Ports)
+	for i, f := range filters {
+		ports, portDiags := portsToModel(ctx, f.Ports, priorPorts(prior, i))
 		diags.Append(portDiags...)
 		result = append(result, resourceFilterModel{
 			Protocol: types.StringValue(string(f.Protocol)),
@@ -398,4 +403,39 @@ func filtersToModel(ctx context.Context, filters []firezone.Filter) ([]resourceF
 		return nil, diags
 	}
 	return result, diags
+}
+
+// portsToModel maps one filter's ports back into the model.
+//
+// The API always returns a ports array, sending [] for a filter that
+// has none - an icmp filter, most commonly. Terraform, though,
+// distinguishes an omitted ports argument (null) from an explicit empty
+// list, so echoing [] where the config said nothing at all is an
+// inconsistent-result error.
+//
+// Resolve it by keeping whatever the plan or prior state held whenever
+// the API reports no ports, since null and [] mean the same thing to
+// the API. With nothing to fall back on - during import - default to
+// null, matching how a config that simply omits ports round-trips.
+func portsToModel(ctx context.Context, ports []string, prior *types.List) (types.List, fwDiagnostics) {
+	if len(ports) == 0 {
+		if prior != nil {
+			return *prior, nil
+		}
+		return types.ListNull(types.StringType), nil
+	}
+	return types.ListValueFrom(ctx, types.StringType, ports)
+}
+
+// priorPorts returns the ports value the caller planned or stored for
+// the filter at index i, or nil when there isn't one - which happens on
+// import, and whenever the API returns more filters than were sent.
+//
+// Matching by index is sound because the API preserves filter order:
+// they're an Ecto embeds_many, stored and returned in the order given.
+func priorPorts(prior []resourceFilterModel, i int) *types.List {
+	if i >= len(prior) {
+		return nil
+	}
+	return &prior[i].Ports
 }
