@@ -57,8 +57,7 @@ func (d *googleDirectoryDataSource) Schema(_ context.Context, _ datasource.Schem
 				Optional: true,
 				Computed: true,
 				Description: "Directory name, as shown in the Firezone dashboard's identity provider settings. Set this " +
-					"or id, not both. Lookup by name requires paginating every Google Workspace directory in the " +
-					"account client-side (the API has no ?name= filter). Fails if more than one directory shares this name.",
+					"or id, not both. Fails if more than one directory shares this name.",
 			},
 			"domain": schema.StringAttribute{
 				Computed:    true,
@@ -130,23 +129,23 @@ func (d *googleDirectoryDataSource) Read(ctx context.Context, req datasource.Rea
 	resp.Diagnostics.Append(resp.State.Set(ctx, &config)...)
 }
 
-// findGoogleDirectoriesByName paginates every Google Workspace directory
-// in the account looking for every exact name match, since the API has
-// no ?name= query filter.
+// findGoogleDirectoriesByName asks the API for every Google directory
+// with this exact name. The name filter does the matching server-side,
+// so this normally makes a single request - it loops pages only because
+// directory names aren't unique and enough matches could span one.
 func findGoogleDirectoriesByName(ctx context.Context, client *firezone.Client, name string) ([]firezone.GoogleDirectory, error) {
 	var matches []firezone.GoogleDirectory
 
-	opts := &firezone.ListOptions{Limit: 100}
+	opts := &firezone.DirectoryListOptions{
+		ListOptions: firezone.ListOptions{Limit: 100},
+		Name:        name,
+	}
 	for {
 		page, err := client.GoogleDirectories.List(ctx, opts)
 		if err != nil {
 			return nil, err
 		}
-		for i := range page.Data {
-			if page.Data[i].Name == name {
-				matches = append(matches, page.Data[i])
-			}
-		}
+		matches = append(matches, page.Data...)
 		if page.Metadata.NextPage == "" {
 			return matches, nil
 		}

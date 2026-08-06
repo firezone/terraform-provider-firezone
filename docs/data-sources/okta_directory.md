@@ -32,7 +32,7 @@ data "firezone_group" "engineering_okta" {
 ### Optional
 
 - `id` (String) Directory ID. Set this or name, not both. Use this value as firezone_group's directory_id.
-- `name` (String) Directory name, as shown in the Firezone dashboard's identity provider settings. Set this or id, not both. Lookup by name requires paginating every Okta directory in the account client-side (the API has no ?name= filter). Fails if more than one directory shares this name.
+- `name` (String) Directory name, as shown in the Firezone dashboard's identity provider settings. Set this or id, not both. Fails if more than one directory shares this name.
 
 ### Read-Only
 

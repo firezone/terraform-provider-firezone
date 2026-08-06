@@ -2,8 +2,12 @@ package provider
 
 import (
 	"context"
+	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
@@ -16,23 +20,40 @@ import (
 )
 
 var (
-	_ resource.Resource                = &policyResource{}
-	_ resource.ResourceWithImportState = &policyResource{}
-	_ resource.ResourceWithConfigure   = &policyResource{}
+	_ resource.Resource                   = &policyResource{}
+	_ resource.ResourceWithImportState    = &policyResource{}
+	_ resource.ResourceWithConfigure      = &policyResource{}
+	_ resource.ResourceWithValidateConfig = &policyResource{}
 )
+
+// validOperatorsForProperty mirrors
+// Portal.Policies.Condition.valid_operators_for_property/1. Property and
+// operator are each valid on their own but only meaningful in specific
+// pairs, so attribute-level OneOf validators can't express this - see
+// ValidateConfig.
+//
+// Keep in sync with the API: a pair missing here is rejected at plan
+// time even though the server would accept it.
+var validOperatorsForProperty = map[string][]string{
+	"remote_ip_location_region": {"is_in", "is_not_in"},
+	"remote_ip":                 {"is_in_cidr", "is_not_in_cidr"},
+	"auth_provider_id":          {"is_in", "is_not_in"},
+	"current_utc_datetime":      {"is_in_day_of_week_time_ranges"},
+	"client_verified":           {"is"},
+}
 
 // NewPolicyResource returns a new firezone_policy resource instance,
 // for use with FirezoneProvider.Resources.
 //
-// This resource intentionally does not expose an "enabled" attribute:
-// the API's Policy responses never include disabled/enabled state (see
-// PortalAPI.PolicyJSON), unlike Actor, whose disabled_at field makes
-// enabled/disabled state properly readable. Managing enable/disable
-// here would mean a value Terraform can set but never verify - the
-// same class of problem as the Gateway token, but worse, since even
-// the initial value after import would be unknown. Call the API's
-// POST /policies/{id}/enable and /disable endpoints directly if you
-// need this until the API exposes the state in GET responses.
+// This resource does not yet expose an "enabled" attribute. It couldn't
+// before: Policy responses carried no enabled/disabled state, so the
+// value would have been settable but never verifiable. That's no longer
+// true - PortalAPI.PolicyJSON now returns is_disabled, and the API takes
+// it on update - so the attribute is now implementable and simply hasn't
+// been added.
+//
+// Do not reintroduce calls to POST /policies/{id}/enable or /disable:
+// those endpoints were removed in favor of the generic update.
 func NewPolicyResource() resource.Resource {
 	return &policyResource{}
 }
@@ -139,6 +160,51 @@ func (r *policyResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 				},
 			},
 		},
+	}
+}
+
+// ValidateConfig rejects condition blocks whose operator doesn't apply
+// to their property. Both attributes carry OneOf validators already, but
+// those check each value in isolation - "current_utc_datetime" with
+// "is_in" passes both and is still nonsense.
+//
+// Without this the mistake surfaces as a 422 at apply time, after
+// earlier resources in the same apply have already been created.
+func (r *policyResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var config policyResourceModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	for i, condition := range config.Condition {
+		// Either value can come from an expression unresolved until
+		// apply. Defer rather than guess - the API still enforces this.
+		if condition.Property.IsUnknown() || condition.Operator.IsUnknown() {
+			continue
+		}
+		if condition.Property.IsNull() || condition.Operator.IsNull() {
+			continue
+		}
+
+		property := condition.Property.ValueString()
+		operator := condition.Operator.ValueString()
+
+		valid, known := validOperatorsForProperty[property]
+		if !known {
+			// The property's own OneOf validator already reported this.
+			continue
+		}
+		if slices.Contains(valid, operator) {
+			continue
+		}
+
+		resp.Diagnostics.AddAttributeError(
+			path.Root("condition").AtListIndex(i).AtName("operator"),
+			"Invalid Attribute Combination",
+			fmt.Sprintf("operator %q does not apply to property %q. Valid operators for %q: %s.",
+				operator, property, property, strings.Join(valid, ", ")),
+		)
 	}
 }
 

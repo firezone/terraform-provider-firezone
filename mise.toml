@@ -50,6 +50,10 @@ if [ -n "$(git status --porcelain docs/ examples/)" ]; then
 fi
 """
 
+[tasks.tf-fmt-check]
+description = "Check Terraform formatting of the examples tfplugindocs reads (CI check)"
+run = "terraform fmt -check -recursive examples/"
+
 [tasks.check]
 description = "Run all CI static analysis + unit test checks (matches CI)"
-depends = ["fmt-check", "vet", "lint", "test", "build"]
+depends = ["fmt-check", "vet", "lint", "test", "build", "tfdocs-check", "tf-fmt-check"]
