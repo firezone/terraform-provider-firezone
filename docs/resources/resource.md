@@ -33,7 +33,6 @@ resource "firezone_resource" "database" {
 ### Required
 
 - `name` (String) Resource name.
-- `site_id` (String) ID of the Site this Resource belongs to.
 - `type` (String) Resource type. One of cidr, ip, dns, static_device_pool. "internet" also exists but is API-read-only and cannot be set here.
 
 ### Optional
@@ -41,7 +40,8 @@ resource "firezone_resource" "database" {
 - `address` (String) Resource address (CIDR, IP, or DNS name, depending on type).
 - `address_description` (String) Human-readable description of the address.
 - `filters` (Block List) Traffic filters restricting the protocols and ports this Resource exposes. (see [below for nested schema](#nestedblock--filters))
-- `ip_stack` (String) IP family constraint. One of ipv4_only, ipv6_only, dual.
+- `ip_stack` (String) IP family constraint. One of ipv4_only, ipv6_only, dual. Applies only to dns Resources, where it defaults to dual; must be omitted for every other type.
+- `site_id` (String) ID of the Site this Resource belongs to. Required for every type except static_device_pool, which is not attached to a Site and must omit it.
 
 ### Read-Only
 
