@@ -25,3 +25,29 @@ resource "aws_secretsmanager_secret_version" "gateway_token" {
   secret_id     = aws_secretsmanager_secret.gateway_token[each.key].id
   secret_string = each.value.token
 }
+
+# Scheduled token rotation. Any change to token_rotation_trigger rotates
+# the token and replaces the "token" attribute with the new secret,
+# which then flows to whatever consumes it - the secret manager entry
+# above, a host's user_data, and so on.
+#
+# Rotation is not instant, and Terraform cannot finish the job. The old
+# token keeps working until the Gateway connects with the replacement or
+# the API's grace period elapses, whichever comes first. Whatever
+# configures the Gateway host has to pick up the new token and restart
+# within that window; if it does not, the Gateway is stranded, and once
+# pickup is confirmed the old token is deleted so rolling back will not
+# help.
+#
+# `terraform plan` warns when a rotation is already pending, and refresh
+# warns if a rotation happened outside Terraform.
+resource "time_rotating" "gateway_token" {
+  rotation_days = 90
+}
+
+resource "firezone_gateway" "rotating" {
+  site_id = firezone_site.main.id
+  name    = "gw-us-west-1"
+
+  token_rotation_trigger = time_rotating.gateway_token.id
+}
