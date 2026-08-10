@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
@@ -19,12 +20,20 @@ var (
 	_ resource.ResourceWithImportState    = &resourceResource{}
 	_ resource.ResourceWithConfigure      = &resourceResource{}
 	_ resource.ResourceWithValidateConfig = &resourceResource{}
+	_ resource.ResourceWithModifyPlan     = &resourceResource{}
 )
 
 // resourceTypeStaticDevicePool is the one Resource type that is not
 // attached to a Site. The API nulls site_id for it server-side, so the
 // provider has to treat site_id as forbidden rather than required here
 // - see ValidateConfig.
+//
+// It is currently readable but not creatable: the API refuses any
+// request that changes a Resource's type to it. The type stays in the
+// schema's enum so existing pools - created in the admin portal - can
+// still be imported, renamed, and destroyed here; ModifyPlan rejects
+// only the create. To re-enable creation once the API allows it, delete
+// ModifyPlan and its test.
 const resourceTypeStaticDevicePool = "static_device_pool"
 
 // resourceTypeDNS is the only Resource type ip_stack applies to. The
@@ -86,8 +95,11 @@ func (r *resourceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 				Description: "Resource name.",
 			},
 			"type": schema.StringAttribute{
-				Required:    true,
-				Description: "Resource type. One of cidr, ip, dns, static_device_pool. \"internet\" also exists but is API-read-only and cannot be set here.",
+				Required: true,
+				Description: "Resource type. One of cidr, ip, dns, static_device_pool. " +
+					"\"static_device_pool\" cannot be created here - the API refuses it - but " +
+					"an existing pool created in the admin portal can be imported and managed. " +
+					"\"internet\" also exists but is API-read-only and cannot be set at all.",
 				Validators: []validator.String{
 					stringvalidator.OneOf("cidr", "ip", "dns", "static_device_pool"),
 				},
@@ -200,6 +212,40 @@ func (r *resourceResource) ValidateConfig(ctx context.Context, req resource.Vali
 				"constraint and rejects the request outright.",
 		)
 	}
+}
+
+// ModifyPlan rejects creating a static_device_pool Resource, which the
+// API refuses with a 422.
+//
+// This lives in ModifyPlan rather than ValidateConfig because only the
+// former can tell a create from an update: a null prior state means
+// create. Removing the type from the schema's enum would block creation
+// too, but would also make existing pools unmanageable - a config block
+// is needed to import one, and the enum would reject it.
+func (r *resourceResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	// Only a create has no prior state. Destroy has no plan.
+	if !req.State.Raw.IsNull() || req.Plan.Raw.IsNull() {
+		return
+	}
+
+	var plan resourceResourceModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	if plan.Type.IsUnknown() || plan.Type.ValueString() != resourceTypeStaticDevicePool {
+		return
+	}
+
+	resp.Diagnostics.AddAttributeError(
+		path.Root("type"),
+		"Device Pools Cannot Be Created",
+		"The API refuses to create a Resource of type \""+resourceTypeStaticDevicePool+"\". "+
+			"Create the device pool in the Firezone admin portal, then adopt it with "+
+			"terraform import - an existing pool can be managed here normally, including "+
+			"its firezone_pool_member entries.",
+	)
 }
 
 func (r *resourceResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {

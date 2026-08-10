@@ -33,7 +33,7 @@ resource "firezone_resource" "database" {
 ### Required
 
 - `name` (String) Resource name.
-- `type` (String) Resource type. One of cidr, ip, dns, static_device_pool. "internet" also exists but is API-read-only and cannot be set here.
+- `type` (String) Resource type. One of cidr, ip, dns, static_device_pool. "static_device_pool" cannot be created here - the API refuses it - but an existing pool created in the admin portal can be imported and managed. "internet" also exists but is API-read-only and cannot be set at all.
 
 ### Optional
 

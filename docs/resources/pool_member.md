@@ -13,8 +13,16 @@ Adds a single Client to a static_device_pool Resource. Multiple firezone_pool_me
 ## Example Usage
 
 ```terraform
-# A static_device_pool Resource is the one type not attached to a Site,
-# so it omits site_id entirely.
+# Device pools cannot currently be created through the API - `terraform
+# apply` rejects it at plan time. Create the pool in the Firezone admin
+# portal, then adopt it here with `terraform import`. Once imported it is
+# managed normally: renamed, destroyed, and given members as below.
+#
+# A pool is the one Resource type not attached to a Site, so it omits
+# site_id entirely.
+#
+#   terraform import firezone_resource.field_laptops <resource_id>
+#
 resource "firezone_resource" "field_laptops" {
   name = "field-laptops"
   type = "static_device_pool"

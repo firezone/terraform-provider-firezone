@@ -161,3 +161,110 @@ func TestResourceResourceValidateConfig(t *testing.T) {
 		})
 	}
 }
+
+// TestResourceResourceModifyPlan_DevicePoolCreate covers the create-only
+// block on device pools. It has to distinguish create from update, which
+// is why it lives in ModifyPlan rather than ValidateConfig - an existing
+// pool imported from the dashboard must stay manageable.
+func TestResourceResourceModifyPlan_DevicePoolCreate(t *testing.T) {
+	ctx := context.Background()
+
+	schemaResp := &fwresource.SchemaResponse{}
+	(&resourceResource{}).Schema(ctx, fwresource.SchemaRequest{}, schemaResp)
+	if schemaResp.Diagnostics.HasError() {
+		t.Fatalf("Schema returned diagnostics: %v", schemaResp.Diagnostics)
+	}
+	schema := schemaResp.Schema
+	objType := schema.Type().TerraformType(ctx).(tftypes.Object)
+
+	object := func(resType tftypes.Value, siteID tftypes.Value) tftypes.Value {
+		return tftypes.NewValue(objType, map[string]tftypes.Value{
+			"id":                  tftypes.NewValue(tftypes.String, nil),
+			"site_id":             siteID,
+			"name":                tftypes.NewValue(tftypes.String, "res"),
+			"type":                resType,
+			"address":             tftypes.NewValue(tftypes.String, nil),
+			"address_description": tftypes.NewValue(tftypes.String, nil),
+			"ip_stack":            tftypes.NewValue(tftypes.String, nil),
+			"filters":             tftypes.NewValue(objType.AttributeTypes["filters"], nil),
+		})
+	}
+	str := func(s string) tftypes.Value { return tftypes.NewValue(tftypes.String, s) }
+	nullStr := tftypes.NewValue(tftypes.String, nil)
+	nullObj := tftypes.NewValue(objType, nil)
+
+	tests := []struct {
+		name    string
+		plan    tftypes.Value
+		state   tftypes.Value
+		wantErr bool
+	}{
+		{
+			// The blocked case: no prior state means create.
+			name:    "creating a device pool is rejected",
+			plan:    object(str("static_device_pool"), nullStr),
+			state:   nullObj,
+			wantErr: true,
+		},
+		{
+			// An imported pool has prior state, so renaming or otherwise
+			// updating it must still work.
+			name:    "updating an existing device pool is allowed",
+			plan:    object(str("static_device_pool"), nullStr),
+			state:   object(str("static_device_pool"), nullStr),
+			wantErr: false,
+		},
+		{
+			name:    "creating a normal resource is allowed",
+			plan:    object(str("cidr"), str("site-1")),
+			state:   nullObj,
+			wantErr: false,
+		},
+		{
+			// Destroy has a null plan and must not error.
+			name:    "destroying a device pool is allowed",
+			plan:    nullObj,
+			state:   object(str("static_device_pool"), nullStr),
+			wantErr: false,
+		},
+		{
+			name:    "unknown type defers",
+			plan:    object(tftypes.NewValue(tftypes.String, tftypes.UnknownValue), nullStr),
+			state:   nullObj,
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := &fwresource.ModifyPlanResponse{
+				Plan: tfsdk.Plan{Raw: tt.plan, Schema: schema},
+			}
+			(&resourceResource{}).ModifyPlan(ctx,
+				fwresource.ModifyPlanRequest{
+					Plan:   tfsdk.Plan{Raw: tt.plan, Schema: schema},
+					State:  tfsdk.State{Raw: tt.state, Schema: schema},
+					Config: tfsdk.Config{Raw: tt.plan, Schema: schema},
+				},
+				resp,
+			)
+
+			if got := resp.Diagnostics.HasError(); got != tt.wantErr {
+				t.Fatalf("HasError() = %v, want %v (diags: %v)", got, tt.wantErr, resp.Diagnostics)
+			}
+			if !tt.wantErr {
+				return
+			}
+			var found bool
+			for _, d := range resp.Diagnostics.Errors() {
+				if strings.Contains(d.Summary(), "Device Pools Cannot Be Created") {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("diagnostics = %v, want the device-pool create error", resp.Diagnostics)
+			}
+		})
+	}
+}
