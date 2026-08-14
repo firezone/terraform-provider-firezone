@@ -77,7 +77,7 @@ resource "firezone_gateway" "rotating" {
 
 ### Optional
 
-- `name` (String) Gateway name. Randomly generated when omitted.
+- `name` (String) Gateway name, 1-255 characters. Randomly generated when omitted - omit the attribute entirely for that, rather than setting it to an empty string.
 - `token_rotation_trigger` (String) Rotates the Gateway's token whenever this value changes, replacing `token` with the new secret. The value itself is arbitrary and is never sent to the API - pair it with time_rotating.<name>.id for scheduled rotation, or set it to any string you bump by hand.
 
 Rotation is not instant. The old token keeps working until the Gateway connects with the replacement or the API's grace period elapses, whichever comes first - so whatever configures the Gateway host must pick up the new `token` and restart within that window, or the Gateway is stranded. Once pickup is confirmed the old token is deleted, so rolling back to it will not work.

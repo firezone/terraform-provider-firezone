@@ -6,12 +6,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/path"
-
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	firezone "github.com/firezone/firezone-go"
@@ -87,9 +88,25 @@ func (r *gatewayResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 				},
 			},
 			"name": schema.StringAttribute{
-				Optional:    true,
-				Computed:    true,
-				Description: "Gateway name. Randomly generated when omitted.",
+				Optional: true,
+				Computed: true,
+				Description: "Gateway name, 1-255 characters. Randomly generated when omitted - " +
+					"omit the attribute entirely for that, rather than setting it to an empty " +
+					"string.",
+				Validators: []validator.String{
+					// Device.changeset/1 bounds the name at 1-255 and trims
+					// first, so without this an over-long name is a 422 at
+					// apply time, after other resources in the same apply
+					// have been created.
+					//
+					// The lower bound also closes a trap of our own making:
+					// ProvisionGatewayRequest.Name is `omitempty`, so name =
+					// "" is dropped from the request, the API generates a
+					// random name, and Terraform then reports an
+					// inconsistent result because state disagrees with the
+					// empty config value.
+					stringvalidator.LengthBetween(1, 255),
+				},
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},

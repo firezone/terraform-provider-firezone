@@ -1,8 +1,14 @@
 package provider
 
 import (
+	"context"
+	"strings"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-framework/path"
+	fwresource "github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
@@ -69,6 +75,62 @@ func TestRotationTriggered(t *testing.T) {
 			if got := rotationTriggered(tt.planned, tt.stored); got != tt.want {
 				t.Errorf("rotationTriggered(%v, %v) = %v, want %v",
 					tt.planned, tt.stored, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestGatewayNameLengthValidator pins the bounds on firezone_gateway's
+// name. Device.changeset/1 enforces 1-255 server-side, so without a
+// plan-time validator an over-long name is a 422 during apply. The lower
+// bound matters for a different reason: ProvisionGatewayRequest.Name is
+// `omitempty`, so name = "" would be dropped from the request, the API
+// would generate a random name, and Terraform would then report an
+// inconsistent result because state disagreed with the empty config.
+func TestGatewayNameLengthValidator(t *testing.T) {
+	ctx := context.Background()
+
+	schemaResp := &fwresource.SchemaResponse{}
+	(&gatewayResource{}).Schema(ctx, fwresource.SchemaRequest{}, schemaResp)
+	if schemaResp.Diagnostics.HasError() {
+		t.Fatalf("Schema returned diagnostics: %v", schemaResp.Diagnostics)
+	}
+
+	nameAttr, ok := schemaResp.Schema.Attributes["name"].(schema.StringAttribute)
+	if !ok {
+		t.Fatalf("name attribute = %T, want schema.StringAttribute", schemaResp.Schema.Attributes["name"])
+	}
+
+	tests := []struct {
+		name    string
+		value   string
+		wantErr bool
+	}{
+		{name: "typical", value: "gw-us-east-1"},
+		{name: "at the maximum", value: strings.Repeat("a", 255)},
+		{name: "single character", value: "a"},
+		{name: "over the maximum", value: strings.Repeat("a", 256), wantErr: true},
+		{name: "empty", value: "", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotErr bool
+			for _, v := range nameAttr.Validators {
+				resp := &validator.StringResponse{}
+				v.ValidateString(ctx,
+					validator.StringRequest{
+						Path:        path.Root("name"),
+						ConfigValue: types.StringValue(tt.value),
+					},
+					resp,
+				)
+				if resp.Diagnostics.HasError() {
+					gotErr = true
+				}
+			}
+			if gotErr != tt.wantErr {
+				t.Errorf("validation error = %v, want %v (len %d)", gotErr, tt.wantErr, len(tt.value))
 			}
 		})
 	}
