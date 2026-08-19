@@ -100,7 +100,11 @@ func (r *groupMembershipResource) Create(ctx context.Context, req resource.Creat
 	groupID := plan.GroupID.ValueString()
 	actorID := plan.ActorID.ValueString()
 
-	if _, err := r.client.Groups.Memberships(groupID).Patch(ctx, []string{actorID}, nil); err != nil {
+	err := serializedPatch(ctx, groupID, func() error {
+		_, err := r.client.Groups.Memberships(groupID).Patch(ctx, []string{actorID}, nil)
+		return err
+	})
+	if err != nil {
 		resp.Diagnostics.AddError("Error Creating Group Membership", err.Error())
 		return
 	}
@@ -157,7 +161,11 @@ func (r *groupMembershipResource) Delete(ctx context.Context, req resource.Delet
 	groupID := state.GroupID.ValueString()
 	actorID := state.ActorID.ValueString()
 
-	if _, err := r.client.Groups.Memberships(groupID).Patch(ctx, nil, []string{actorID}); err != nil && !firezone.IsNotFound(err) {
+	err := serializedPatch(ctx, groupID, func() error {
+		_, err := r.client.Groups.Memberships(groupID).Patch(ctx, nil, []string{actorID})
+		return err
+	})
+	if err != nil && !firezone.IsNotFound(err) {
 		resp.Diagnostics.AddError("Error Deleting Group Membership", err.Error())
 	}
 }

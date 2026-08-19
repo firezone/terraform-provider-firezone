@@ -107,7 +107,11 @@ func (r *poolMemberResource) Create(ctx context.Context, req resource.CreateRequ
 	resourceID := plan.ResourceID.ValueString()
 	deviceID := plan.DeviceID.ValueString()
 
-	if _, err := r.client.Resources.PoolMembers(resourceID).Patch(ctx, []string{deviceID}, nil); err != nil {
+	err := serializedPatch(ctx, resourceID, func() error {
+		_, err := r.client.Resources.PoolMembers(resourceID).Patch(ctx, []string{deviceID}, nil)
+		return err
+	})
+	if err != nil {
 		resp.Diagnostics.AddError("Error Creating Pool Member", err.Error())
 		return
 	}
@@ -165,7 +169,11 @@ func (r *poolMemberResource) Delete(ctx context.Context, req resource.DeleteRequ
 	resourceID := state.ResourceID.ValueString()
 	deviceID := state.DeviceID.ValueString()
 
-	if _, err := r.client.Resources.PoolMembers(resourceID).Patch(ctx, nil, []string{deviceID}); err != nil && !firezone.IsNotFound(err) {
+	err := serializedPatch(ctx, resourceID, func() error {
+		_, err := r.client.Resources.PoolMembers(resourceID).Patch(ctx, nil, []string{deviceID})
+		return err
+	})
+	if err != nil && !firezone.IsNotFound(err) {
 		resp.Diagnostics.AddError("Error Deleting Pool Member", err.Error())
 	}
 }
