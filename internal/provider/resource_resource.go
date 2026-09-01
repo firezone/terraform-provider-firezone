@@ -107,10 +107,26 @@ func (r *resourceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 			"address": schema.StringAttribute{
 				Optional:    true,
 				Description: "Resource address (CIDR, IP, or DNS name, depending on type).",
+				Validators: []validator.String{
+					// The API stores an empty string as null, so a config that
+					// sets one can never match the value read back. Say so at
+					// plan time rather than failing the apply with Terraform's
+					// generic inconsistent-result error. Omit the argument to
+					// leave the field unset.
+					stringvalidator.LengthAtLeast(1),
+				},
 			},
 			"address_description": schema.StringAttribute{
 				Optional:    true,
 				Description: "Human-readable description of the address.",
+				Validators: []validator.String{
+					// The API stores an empty string as null, so a config that
+					// sets one can never match the value read back. Say so at
+					// plan time rather than failing the apply with Terraform's
+					// generic inconsistent-result error. Omit the argument to
+					// leave the field unset.
+					stringvalidator.LengthAtLeast(1),
+				},
 			},
 			"ip_stack": schema.StringAttribute{
 				Optional: true,

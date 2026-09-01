@@ -106,6 +106,14 @@ func (r *policyResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 			"description": schema.StringAttribute{
 				Optional:    true,
 				Description: "Human-readable description of why this access is granted.",
+				Validators: []validator.String{
+					// The API stores an empty string as null, so a config that
+					// sets one can never match the value read back. Say so at
+					// plan time rather than failing the apply with Terraform's
+					// generic inconsistent-result error. Omit the argument to
+					// leave the field unset.
+					stringvalidator.LengthAtLeast(1),
+				},
 			},
 			"flow_log_uploads_enabled": schema.BoolAttribute{
 				Optional:    true,
@@ -329,7 +337,15 @@ func policyModelFromAPI(ctx context.Context, pol *firezone.Policy, model *policy
 	model.ID = types.StringValue(pol.ID)
 	model.GroupID = types.StringValue(pol.GroupID)
 	model.ResourceID = types.StringValue(pol.ResourceID)
-	model.Description = types.StringValue(pol.Description)
+	// A Policy with no description reads back as "" from the API, but
+	// the config that produced it said nothing at all. Mapping it to null
+	// is what keeps the two consistent - Terraform rejects an apply whose
+	// result turns a null Optional attribute into an empty string.
+	if pol.Description == "" {
+		model.Description = types.StringNull()
+	} else {
+		model.Description = types.StringValue(pol.Description)
+	}
 	model.FlowLogUploadsEnabled = types.BoolValue(pol.FlowLogUploadsEnabled)
 
 	conditions, diags := conditionsToModel(ctx, pol.Conditions)

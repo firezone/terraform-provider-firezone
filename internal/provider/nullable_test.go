@@ -14,9 +14,9 @@ import (
 // the struct: the whole point of the mapping is what reaches the wire.
 //
 // The null case is the one that matters. Update requests are
-// merge-patch, so omitting the field keeps the server's old value and
-// sending "" is ignored outright - only an explicit null clears it, and
-// anything else leaves the read-back contradicting the plan.
+// merge-patch, so omitting the field keeps the server's old value -
+// only an explicit null clears it, and anything else leaves the
+// read-back contradicting the plan.
 func TestNullableString(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -24,6 +24,9 @@ func TestNullableString(t *testing.T) {
 		want  string
 	}{
 		{"set", types.StringValue("prod database"), `{"v":"prod database"}`},
+		// The schema rejects an empty string on every attribute this
+		// maps, so this case is unreachable from config; it is pinned
+		// only to show the helper does not quietly reinterpret it.
 		{"empty string is sent as-is", types.StringValue(""), `{"v":""}`},
 		{"null clears", types.StringNull(), `{"v":null}`},
 		{"unknown is omitted", types.StringUnknown(), `{}`},

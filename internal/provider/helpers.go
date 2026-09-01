@@ -75,8 +75,11 @@ func configureClient(providerData any, diags *fwDiagnostics) (*firezone.Client, 
 // an explicit JSON null - firezone.Clear. Omitting the field instead
 // leaves the old value in place, and the read-back then contradicts the
 // plan, which Terraform reports as "Provider produced inconsistent
-// result after apply". Sending "" is no better: the API treats an empty
-// string as absent and ignores it.
+// result after apply". Sending "" is not the same thing: the API
+// replaces an empty string with the field's default, so it happens to
+// clear a nullable field too, but only by coincidence - Clear says what
+// it means. Config can't reach that path anyway; the schema rejects an
+// empty string on these attributes.
 //
 // Unknown values can't be sent at all, so they're omitted; that only
 // happens for Optional+Computed attributes, whose value the server

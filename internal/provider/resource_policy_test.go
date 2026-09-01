@@ -1,9 +1,12 @@
 package provider
 
 import (
+	"context"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+
+	firezone "github.com/firezone/firezone-go"
 )
 
 func TestAccPolicyResource(t *testing.T) {
@@ -79,4 +82,40 @@ resource "firezone_policy" "test" {
   }
 }
 `
+}
+
+// TestPolicyModelFromAPI_DescriptionNullVsEmpty pins the null-vs-empty
+// handling for a Policy's description.
+//
+// The API has no empty description, only a null one, and returns it as
+// "". A config that omitted the argument planned null, so echoing ""
+// back into state is an inconsistent-result error on the very first
+// apply of a Policy without a description.
+func TestPolicyModelFromAPI_DescriptionNullVsEmpty(t *testing.T) {
+	tests := []struct {
+		name       string
+		apiValue   string
+		wantNull   bool
+		wantString string
+	}{
+		{name: "empty reads back as null", apiValue: "", wantNull: true},
+		{name: "set reads back as its value", apiValue: "prod access", wantString: "prod access"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var model policyResourceModel
+			diags := policyModelFromAPI(context.Background(), &firezone.Policy{Description: tt.apiValue}, &model)
+			if diags.HasError() {
+				t.Fatalf("policyModelFromAPI returned diagnostics: %v", diags)
+			}
+
+			if got := model.Description.IsNull(); got != tt.wantNull {
+				t.Fatalf("Description.IsNull() = %v, want %v", got, tt.wantNull)
+			}
+			if !tt.wantNull && model.Description.ValueString() != tt.wantString {
+				t.Errorf("Description = %q, want %q", model.Description.ValueString(), tt.wantString)
+			}
+		})
+	}
 }

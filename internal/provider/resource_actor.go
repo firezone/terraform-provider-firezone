@@ -63,6 +63,14 @@ func (r *actorResource) Schema(_ context.Context, _ resource.SchemaRequest, resp
 			"email": schema.StringAttribute{
 				Optional:    true,
 				Description: "Email address. Required for account_user and account_admin_user; must be omitted for service_account.",
+				Validators: []validator.String{
+					// The API stores an empty string as null, so a config that
+					// sets one can never match the value read back. Say so at
+					// plan time rather than failing the apply with Terraform's
+					// generic inconsistent-result error. Omit the argument to
+					// leave the field unset.
+					stringvalidator.LengthAtLeast(1),
+				},
 			},
 			"type": schema.StringAttribute{
 				Required:    true,
