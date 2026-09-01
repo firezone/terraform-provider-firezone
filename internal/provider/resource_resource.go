@@ -332,11 +332,11 @@ func (r *resourceResource) Update(ctx context.Context, req resource.UpdateReques
 	updated, err := r.client.Resources.Update(ctx, plan.ID.ValueString(), &firezone.UpdateResourceRequest{
 		Name:               plan.Name.ValueString(),
 		Type:               firezone.ResourceType(plan.Type.ValueString()),
-		Address:            plan.Address.ValueString(),
-		AddressDescription: plan.AddressDescription.ValueString(),
-		IPStack:            firezone.IPStack(plan.IPStack.ValueString()),
-		SiteID:             plan.SiteID.ValueString(),
-		Filters:            filters,
+		Address:            nullableString(plan.Address),
+		AddressDescription: nullableString(plan.AddressDescription),
+		IPStack:            ipStackForUpdate(plan.IPStack),
+		SiteID:             nullableString(plan.SiteID),
+		Filters:            &filters,
 	})
 	if err != nil {
 		resp.Diagnostics.AddError("Error Updating Resource", err.Error())
@@ -429,6 +429,21 @@ func filtersFromModel(ctx context.Context, filters []resourceFilterModel) ([]fir
 		})
 	}
 	return result, diags
+}
+
+// ipStackForUpdate maps the planned ip_stack onto the SDK's tri-state
+// update field.
+//
+// Unlike the other nullable attributes, ip_stack is never cleared. It
+// applies only to dns Resources, where the API always has a value for
+// it, and the API rejects the field outright on every other type - so
+// a JSON null would turn "this Resource has no IP stack" into a 422.
+// Null or unknown therefore means omit, not clear.
+func ipStackForUpdate(v types.String) *firezone.Null[firezone.IPStack] {
+	if v.IsNull() || v.IsUnknown() || v.ValueString() == "" {
+		return nil
+	}
+	return firezone.Set(firezone.IPStack(v.ValueString()))
 }
 
 // filtersToModel maps the API's filters back into the model. prior is

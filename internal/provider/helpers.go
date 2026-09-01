@@ -5,6 +5,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	firezone "github.com/firezone/firezone-go"
 )
@@ -64,4 +65,28 @@ func configureClient(providerData any, diags *fwDiagnostics) (*firezone.Client, 
 		return nil, false
 	}
 	return client, true
+}
+
+// nullableString maps an Optional Terraform string attribute onto the
+// SDK's tri-state update field.
+//
+// A null attribute means the config no longer sets the argument, and on
+// a merge-patch update the only way to make the server agree is to send
+// an explicit JSON null - firezone.Clear. Omitting the field instead
+// leaves the old value in place, and the read-back then contradicts the
+// plan, which Terraform reports as "Provider produced inconsistent
+// result after apply". Sending "" is no better: the API treats an empty
+// string as absent and ignores it.
+//
+// Unknown values can't be sent at all, so they're omitted; that only
+// happens for Optional+Computed attributes, whose value the server
+// supplies anyway.
+func nullableString(v types.String) *firezone.Null[string] {
+	if v.IsUnknown() {
+		return nil
+	}
+	if v.IsNull() {
+		return firezone.Clear[string]()
+	}
+	return firezone.Set(v.ValueString())
 }

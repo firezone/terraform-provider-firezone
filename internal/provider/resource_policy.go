@@ -292,9 +292,9 @@ func (r *policyResource) Update(ctx context.Context, req resource.UpdateRequest,
 	updated, err := r.client.Policies.Update(ctx, plan.ID.ValueString(), &firezone.UpdatePolicyRequest{
 		GroupID:               plan.GroupID.ValueString(),
 		ResourceID:            plan.ResourceID.ValueString(),
-		Description:           plan.Description.ValueString(),
+		Description:           nullableString(plan.Description),
 		FlowLogUploadsEnabled: &flowLogUploadsEnabled,
-		Conditions:            conditions,
+		Conditions:            &conditions,
 	})
 	if err != nil {
 		resp.Diagnostics.AddError("Error Updating Policy", err.Error())

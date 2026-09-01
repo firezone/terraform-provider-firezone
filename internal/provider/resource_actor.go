@@ -169,7 +169,7 @@ func (r *actorResource) Update(ctx context.Context, req resource.UpdateRequest, 
 	updated, err := r.client.Actors.Update(ctx, plan.ID.ValueString(), &firezone.UpdateActorRequest{
 		Name:                plan.Name.ValueString(),
 		Type:                firezone.ActorType(plan.Type.ValueString()),
-		Email:               plan.Email.ValueString(),
+		Email:               nullableString(plan.Email),
 		AllowEmailOTPSignIn: &allowOTP,
 	})
 	if err != nil {
