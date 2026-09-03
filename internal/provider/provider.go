@@ -138,10 +138,16 @@ func (p *FirezoneProvider) Configure(ctx context.Context, req provider.Configure
 		return
 	}
 
+	// WithUserAgent replaces the SDK's own User-Agent rather than
+	// extending it, so the SDK's identity is appended here. Without it a
+	// Firezone operator looking at a problem request can see which
+	// provider version sent it but not which client version built it,
+	// and the two move independently.
 	userAgent := "terraform-provider-firezone"
 	if p.version != "" {
 		userAgent += "/" + p.version
 	}
+	userAgent += " firezone-go-client/" + firezone.Version
 
 	opts := []firezone.Option{firezone.WithUserAgent(userAgent)}
 
