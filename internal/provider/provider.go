@@ -40,6 +40,8 @@ type firezoneProviderModel struct {
 	Token        types.String `tfsdk:"token"`
 	MaxRetries   types.Int64  `tfsdk:"max_retries"`
 	RetryMaxWait types.Int64  `tfsdk:"retry_max_wait_seconds"`
+
+	RequestTimeout types.Int64 `tfsdk:"request_timeout_seconds"`
 }
 
 // New returns a factory for the Firezone provider, for use with
@@ -95,6 +97,20 @@ func (p *FirezoneProvider) Schema(_ context.Context, _ provider.SchemaRequest, r
 					"since a bigger cap lengthens every later attempt.",
 				Validators: []validator.Int64{
 					int64validator.AtLeast(1),
+				},
+			},
+			"request_timeout_seconds": schema.Int64Attribute{
+				Optional: true,
+				Description: "How long any single HTTP request may take, in seconds, covering " +
+					"everything from opening the connection to reading the response. Defaults " +
+					"to the FIREZONE_REQUEST_TIMEOUT_SECONDS environment variable, then to " +
+					"the API client's own default of 30. This bounds one attempt, not one " +
+					"operation: rate-limit retries wait between attempts, so a throttled " +
+					"call can still take longer overall - max_retries and " +
+					"retry_max_wait_seconds are what bound that. Set 0 to impose no timeout, " +
+					"which leaves an unresponsive endpoint able to hang a run indefinitely.",
+				Validators: []validator.Int64{
+					int64validator.AtLeast(0),
 				},
 			},
 		},
@@ -167,6 +183,14 @@ func (p *FirezoneProvider) Configure(ctx context.Context, req provider.Configure
 		opts = append(opts, firezone.WithRetryMaxWait(retryMaxWait))
 	}
 
+	requestTimeout, ok := resolveRequestTimeout(config.RequestTimeout, &resp.Diagnostics)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if ok {
+		opts = append(opts, firezone.WithRequestTimeout(requestTimeout))
+	}
+
 	client, err := firezone.NewClient(endpoint, token, opts...)
 	if err != nil {
 		resp.Diagnostics.AddError("Unable to Create Firezone API Client", err.Error())
@@ -223,6 +247,36 @@ func resolveRetryMaxWait(configured types.Int64, diags *diag.Diagnostics) (time.
 			path.Root("retry_max_wait_seconds"),
 			"Invalid FIREZONE_RETRY_MAX_WAIT_SECONDS",
 			fmt.Sprintf("Expected a positive integer number of seconds, got: %q", raw),
+		)
+		return 0, false
+	}
+	return time.Duration(parsed) * time.Second, true
+}
+
+// resolveRequestTimeout reads the per-request timeout from config,
+// falling back to FIREZONE_REQUEST_TIMEOUT_SECONDS. As with
+// resolveMaxRetries, ok is false when neither is set so the API client
+// keeps its own default.
+//
+// Zero is accepted rather than treated as unset: the API client reads
+// it as "impose no timeout", which is a deliberate choice a user can
+// make and not the same as leaving the attribute out.
+func resolveRequestTimeout(configured types.Int64, diags *diag.Diagnostics) (time.Duration, bool) {
+	if !configured.IsNull() && !configured.IsUnknown() {
+		return time.Duration(configured.ValueInt64()) * time.Second, true
+	}
+
+	raw := os.Getenv("FIREZONE_REQUEST_TIMEOUT_SECONDS")
+	if raw == "" {
+		return 0, false
+	}
+
+	parsed, err := strconv.Atoi(raw)
+	if err != nil || parsed < 0 {
+		diags.AddAttributeError(
+			path.Root("request_timeout_seconds"),
+			"Invalid FIREZONE_REQUEST_TIMEOUT_SECONDS",
+			fmt.Sprintf("Expected a non-negative integer number of seconds, got: %q", raw),
 		)
 		return 0, false
 	}

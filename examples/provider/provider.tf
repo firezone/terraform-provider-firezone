@@ -24,4 +24,10 @@ provider "firezone" {
   #
   # max_retries            = 10
   # retry_max_wait_seconds = 30
+
+  # Bounds a single HTTP request, not a whole operation - a throttled
+  # call still spends the retry waits above on top of this. 0 removes
+  # the bound, letting an unresponsive endpoint hang a run.
+  #
+  # request_timeout_seconds = 30
 }

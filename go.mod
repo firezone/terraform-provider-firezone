@@ -3,7 +3,7 @@ module github.com/firezone/terraform-provider-firezone
 go 1.26.3
 
 require (
-	github.com/firezone/firezone-go v0.0.0
+	github.com/firezone/firezone-go v0.1.0
 	github.com/hashicorp/terraform-plugin-framework v1.19.0
 	github.com/hashicorp/terraform-plugin-framework-validators v0.19.0
 	github.com/hashicorp/terraform-plugin-go v0.31.0
@@ -85,7 +85,5 @@ require (
 	gopkg.in/yaml.v2 v2.3.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-replace github.com/firezone/firezone-go => ../firezone-go
 
 tool github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs

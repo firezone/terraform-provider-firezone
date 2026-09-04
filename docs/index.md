@@ -38,6 +38,12 @@ provider "firezone" {
   #
   # max_retries            = 10
   # retry_max_wait_seconds = 30
+
+  # Bounds a single HTTP request, not a whole operation - a throttled
+  # call still spends the retry waits above on top of this. 0 removes
+  # the bound, letting an unresponsive endpoint hang a run.
+  #
+  # request_timeout_seconds = 30
 }
 ```
 
@@ -48,5 +54,6 @@ provider "firezone" {
 
 - `endpoint` (String) The bare Firezone API host, e.g. https://api.firezone.dev. Defaults to the FIREZONE_ENDPOINT environment variable.
 - `max_retries` (Number) How many times to retry a request rate limited with HTTP 429. Waits honor the Retry-After header and add jitter. Defaults to the FIREZONE_MAX_RETRIES environment variable, then to the API client's own default. The API rate limits per account - roughly 20 requests of burst refilling at one per second - so a large apply or destroy at Terraform's default parallelism of 10 will be throttled; raise this, or lower parallelism with -parallelism=N, if operations still fail with 429.
+- `request_timeout_seconds` (Number) How long any single HTTP request may take, in seconds, covering everything from opening the connection to reading the response. Defaults to the FIREZONE_REQUEST_TIMEOUT_SECONDS environment variable, then to the API client's own default of 30. This bounds one attempt, not one operation: rate-limit retries wait between attempts, so a throttled call can still take longer overall - max_retries and retry_max_wait_seconds are what bound that. Set 0 to impose no timeout, which leaves an unresponsive endpoint able to hang a run indefinitely.
 - `retry_max_wait_seconds` (Number) Caps how long any single rate-limit retry waits, in seconds. Waits escalate exponentially up to this cap and never drop below the Retry-After header. Defaults to the FIREZONE_RETRY_MAX_WAIT_SECONDS environment variable, then to the API client's own default of 30. Raising this buys more total patience than raising max_retries does, since a bigger cap lengthens every later attempt.
 - `token` (String, Sensitive) Bearer token for an api_client actor. Defaults to the FIREZONE_TOKEN environment variable.
