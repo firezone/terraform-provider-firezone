@@ -7,7 +7,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
-	firezone "github.com/firezone/firezone-go"
+	firezone "github.com/firezone/firezone-sdk-go"
 )
 
 // fwDiagnostics is a local alias for diag.Diagnostics, used to shorten

@@ -12,7 +12,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 
-	firezone "github.com/firezone/firezone-go"
+	firezone "github.com/firezone/firezone-sdk-go"
 )
 
 // newClientsListServer stands up an httptest server serving the given

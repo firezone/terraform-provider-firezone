@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	firezone "github.com/firezone/firezone-go"
+	firezone "github.com/firezone/firezone-sdk-go"
 )
 
 // The membership PATCH endpoint used to be read-modify-write on the
@@ -34,7 +34,7 @@ import (
 // out-of-process races. Its endpoint was never affected by the
 // stale-entry bug: PoolMemberController already wrote rows directly.
 //
-// Neither half belongs in firezone-go: this is a Terraform-shaped
+// Neither half belongs in firezone-sdk-go: this is a Terraform-shaped
 // concurrency problem, and an SDK that silently serialized callers'
 // requests would surprise everyone else.
 

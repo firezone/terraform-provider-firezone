@@ -6,7 +6,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 
-	firezone "github.com/firezone/firezone-go"
+	firezone "github.com/firezone/firezone-sdk-go"
 )
 
 func TestAccPolicyResource(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	firezone "github.com/firezone/firezone-go"
+	firezone "github.com/firezone/firezone-sdk-go"
 )
 
 func conflictErr() error {
@@ -30,8 +30,8 @@ func TestSerializedPatchSerializesPerParent(t *testing.T) {
 			_ = serializedPatch(context.Background(), t.Name(), func() error {
 				n := atomic.AddInt32(&inFlight, 1)
 				for {
-					max := atomic.LoadInt32(&maxInFlight)
-					if n <= max || atomic.CompareAndSwapInt32(&maxInFlight, max, n) {
+					cur := atomic.LoadInt32(&maxInFlight)
+					if n <= cur || atomic.CompareAndSwapInt32(&maxInFlight, cur, n) {
 						break
 					}
 				}

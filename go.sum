@@ -42,8 +42,8 @@ github.com/emirpasic/gods v1.18.1/go.mod h1:8tpGGwCnJ5H4r6BWwaV6OrWmMoPhUl5jm/FM
 github.com/fatih/color v1.13.0/go.mod h1:kLAiJbzzSOZDVNGyDpeOxJ47H46qBXwg5ILebYFFOfk=
 github.com/fatih/color v1.18.0 h1:S8gINlzdQ840/4pfAwic/ZE0djQEH3wM94VfqLTZcOM=
 github.com/fatih/color v1.18.0/go.mod h1:4FelSpRwEGDpQ12mAdzqdOukCy4u8WUtOY6lkT/6HfU=
-github.com/firezone/firezone-go v0.1.0 h1:upsE19TQn+GrQ7FgLj2fHQ3BbzRR1v3F44w/njTOdV4=
-github.com/firezone/firezone-go v0.1.0/go.mod h1:9JOWCbGEOcVI+TK1aTGMd73c0RwnhK2RmszkXJMUw/o=
+github.com/firezone/firezone-sdk-go v0.1.0 h1:EDPaYuONxRy9gIY6k9VdKyb18Va70aBeYtp3TPjNDi4=
+github.com/firezone/firezone-sdk-go v0.1.0/go.mod h1:ngbdlBcZ+kTeQS4EBjyA/sWMoB3y6CCVgvfruT8Zf78=
 github.com/frankban/quicktest v1.14.3 h1:FJKSZTDHjyhriyC81FLQ0LY93eSai0ZyR/ZIkd3ZUKE=
 github.com/frankban/quicktest v1.14.3/go.mod h1:mgiwOwqx65TmIk1wJ6Q7wvnVMocbUorkibMOrVTHZps=
 github.com/go-git/gcfg v1.5.1-0.20230307220236-3a3c6141e376 h1:+zs/tPmkDkHx3U66DAb0lQFJrpS6731Oaa12ikc+DiI=

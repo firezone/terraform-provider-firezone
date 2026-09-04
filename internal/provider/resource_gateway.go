@@ -15,7 +15,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
-	firezone "github.com/firezone/firezone-go"
+	firezone "github.com/firezone/firezone-sdk-go"
 )
 
 var (
@@ -31,7 +31,7 @@ var (
 // CRITICAL, read before touching this file: the API mints the Gateway's
 // token once, on POST, and never re-exposes it - GET responses have no
 // token field at all (see firezone.Gateway vs firezone.ProvisionedGateway
-// in firezone-go). Read must leave the existing "token" state value
+// in firezone-sdk-go). Read must leave the existing "token" state value
 // untouched; it does NOT overwrite it with an empty value, because
 // there's nothing to overwrite it with. This means:
 //
