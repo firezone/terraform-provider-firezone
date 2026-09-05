@@ -45,10 +45,11 @@ type firezoneProviderModel struct {
 }
 
 // New returns a factory for the Firezone provider, for use with
-// providerserver.Serve.
-func New() func() provider.Provider {
+// providerserver.Serve. The version is injected by main and reported
+// in the API client's User-Agent.
+func New(version string) func() provider.Provider {
 	return func() provider.Provider {
-		return &FirezoneProvider{}
+		return &FirezoneProvider{version: version}
 	}
 }
 
@@ -163,7 +164,7 @@ func (p *FirezoneProvider) Configure(ctx context.Context, req provider.Configure
 	if p.version != "" {
 		userAgent += "/" + p.version
 	}
-	userAgent += " firezone-go-client/" + firezone.Version
+	userAgent += " firezone-sdk-go-client/" + firezone.Version
 
 	opts := []firezone.Option{firezone.WithUserAgent(userAgent)}
 

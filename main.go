@@ -13,8 +13,13 @@ import (
 	"github.com/firezone/terraform-provider-firezone/internal/provider"
 )
 
+// version is overwritten at release time by GoReleaser's ldflags
+// (-X main.version=...). Local and `go install` builds keep "dev",
+// which is what the User-Agent then reports.
+var version = "dev"
+
 func main() {
-	err := providerserver.Serve(context.Background(), provider.New(), providerserver.ServeOpts{
+	err := providerserver.Serve(context.Background(), provider.New(version), providerserver.ServeOpts{
 		Address: "registry.terraform.io/firezone/firezone",
 	})
 	if err != nil {

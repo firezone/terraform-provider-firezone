@@ -11,7 +11,7 @@ import (
 // testAccProtoV6ProviderFactories is shared by every acceptance test in
 // this package.
 var testAccProtoV6ProviderFactories = map[string]func() (tfprotov6.ProviderServer, error){
-	"firezone": providerserver.NewProtocol6WithError(New()()),
+	"firezone": providerserver.NewProtocol6WithError(New("test")()),
 }
 
 // testAccPreCheck validates that acceptance tests have a real Firezone

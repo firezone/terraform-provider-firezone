@@ -1,0 +1,74 @@
+---
+# GoReleaser builds the artifacts the Terraform Registry expects: one
+# zip per OS/arch, a SHA256SUMS file covering them, and a detached GPG
+# signature of that checksum file. The registry verifies the signature
+# against the public key uploaded when the provider was claimed, so a
+# release missing the .sig is rejected.
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+    # Reproducible builds: commit time rather than build time, and
+    # -trimpath so absolute paths from the runner don't leak in.
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    flags:
+      - -trimpath
+    ldflags:
+      - "-s -w -X main.version={{ .Version }}"
+    goos:
+      - darwin
+      - freebsd
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+      - "386"
+      - arm
+    goarm:
+      - "7"
+    ignore:
+      # Modern darwin is 64-bit only.
+      - goos: darwin
+        goarch: "386"
+      - goos: darwin
+        goarch: arm
+    # The registry requires this exact binary name inside each zip.
+    binary: "{{ .ProjectName }}_v{{ .Version }}"
+
+archives:
+  - formats: [zip]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "{{ .ProjectName }}_{{ .Version }}_SHA256SUMS"
+  algorithm: sha256
+  # The manifest declares the plugin protocol version and must be
+  # covered by the checksums, not just attached to the release.
+  extra_files:
+    - glob: terraform-registry-manifest.json
+      name_template: "{{ .ProjectName }}_{{ .Version }}_manifest.json"
+
+signs:
+  - artifacts: checksum
+    args:
+      - "--batch"
+      - "--local-user"
+      - "{{ .Env.GPG_FINGERPRINT }}"
+      - "--output"
+      - "${signature}"
+      - "--detach-sign"
+      - "${artifact}"
+
+release:
+  extra_files:
+    - glob: terraform-registry-manifest.json
+      name_template: "{{ .ProjectName }}_{{ .Version }}_manifest.json"
+
+changelog:
+  disable: true

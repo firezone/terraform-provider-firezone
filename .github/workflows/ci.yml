@@ -1,0 +1,86 @@
+---
+name: Continuous Integration
+run-name: Triggered by ${{ github.actor }} on ${{ github.event_name }}
+on:
+  pull_request:
+  merge_group:
+    types: [checks_requested]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref, except on main where every
+# commit's result is worth keeping.
+concurrency:
+  group: "ci-${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      # Tool versions - including terraform, which tfplugindocs shells
+      # out to - come from .tool-versions, so CI and local runs can't
+      # drift apart.
+      - uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
+        with:
+          version: "2026.7.7"
+          reshim: true
+          cache_key_prefix: "mise-v1"
+
+      - uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-${{ runner.os }}-${{ hashFiles('go.sum') }}
+          restore-keys: go-${{ runner.os }}-
+
+      # Mirrors `mise run check` - the composite task developers run
+      # locally. Kept as separate steps so a failure names itself in the
+      # job summary instead of hiding behind "check failed".
+      - run: mise run fmt-check
+      - run: mise run vet
+      - run: mise run lint
+      - run: mise run test
+      - run: mise run build
+
+      # Generated docs are what practitioners read before the schema, so
+      # a stale docs/ is a user-facing bug. This regenerates and fails on
+      # any diff.
+      - run: mise run tfdocs-check
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive examples/
+
+  # Acceptance tests need a real dev server and a real api_client token,
+  # neither of which CI can currently provision - see AGENT.md. Left as a
+  # manual-dispatch job so it's runnable against a reachable environment
+  # rather than silently absent.
+  acceptance:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: acceptance-tests
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
+        with:
+          version: "2026.7.7"
+          reshim: true
+          cache_key_prefix: "mise-v1"
+
+      - run: mise run test-acceptance
+        env:
+          FIREZONE_ENDPOINT: ${{ secrets.FIREZONE_ENDPOINT }}
+          FIREZONE_TOKEN: ${{ secrets.FIREZONE_TOKEN }}
+          # Clients enroll themselves, so the pool-member and client
+          # tests can't build their own fixtures - they skip when these
+          # are unset.
+          FIREZONE_TEST_CLIENT_ID: ${{ secrets.FIREZONE_TEST_CLIENT_ID }}
+          FIREZONE_TEST_CLIENT_ID_2: ${{ secrets.FIREZONE_TEST_CLIENT_ID_2 }}
