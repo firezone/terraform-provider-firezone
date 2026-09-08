@@ -13,6 +13,7 @@ permissions:
 
 jobs:
   goreleaser:
+    name: Build, sign and publish release artifacts
     runs-on: ubuntu-latest
     # Scopes GPG_PRIVATE_KEY to a reviewed environment rather than the
     # repo secret store. Configure required reviewers on the "release"
@@ -22,26 +23,30 @@ jobs:
       # GoReleaser creates the GitHub Release and uploads artifacts.
       contents: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # GoReleaser needs full history to resolve the previous tag.
           fetch-depth: 0
 
       # Same source of truth as CI: the Go version comes from
       # .tool-versions, so releases can't drift from what was tested.
-      - uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
+      - name: Install pinned toolchain from .tool-versions
+        uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
         with:
           version: "2026.7.7"
           reshim: true
           cache_key_prefix: "mise-v1"
 
-      - uses: crazy-max/ghaction-import-gpg@2dc316deee8e90f13e1a351ab510b4d5bc0c82cd # v7.0.0
+      - name: Import the release signing key
+        uses: crazy-max/ghaction-import-gpg@2dc316deee8e90f13e1a351ab510b4d5bc0c82cd # v7.0.0
         id: import_gpg
         with:
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
           passphrase: ${{ secrets.PASSPHRASE }}
 
-      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           version: "~> v2"
           args: release --clean

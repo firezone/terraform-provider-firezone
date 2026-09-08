@@ -20,20 +20,24 @@ permissions:
 
 jobs:
   check:
+    name: Static analysis and unit tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Check out the repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       # Tool versions - including terraform, which tfplugindocs shells
       # out to - come from .tool-versions, so CI and local runs can't
       # drift apart.
-      - uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
+      - name: Install pinned toolchain from .tool-versions
+        uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
         with:
           version: "2026.7.7"
           reshim: true
           cache_key_prefix: "mise-v1"
 
-      - uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+      - name: Restore Go build and module cache
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
         with:
           path: |
             ~/.cache/go-build
@@ -44,18 +48,28 @@ jobs:
       # Mirrors `mise run check` - the composite task developers run
       # locally. Kept as separate steps so a failure names itself in the
       # job summary instead of hiding behind "check failed".
-      - run: mise run fmt-check
-      - run: mise run vet
-      - run: mise run lint
-      - run: mise run test
-      - run: mise run build
+      - name: Check Go formatting
+        run: mise run fmt-check
+
+      - name: Run go vet
+        run: mise run vet
+
+      - name: Run golangci-lint
+        run: mise run lint
+
+      - name: Run unit tests
+        run: mise run test
+
+      - name: Build the provider binary
+        run: mise run build
 
       # Generated docs are what practitioners read before the schema, so
       # a stale docs/ is a user-facing bug. This regenerates and fails on
       # any diff.
-      - run: mise run tfdocs-check
+      - name: Check generated docs are up to date
+        run: mise run tfdocs-check
 
-      - name: terraform fmt
+      - name: Check Terraform formatting of examples
         run: terraform fmt -check -recursive examples/
 
   # Acceptance tests need a real dev server and a real api_client token,
@@ -63,19 +77,23 @@ jobs:
   # manual-dispatch job so it's runnable against a reachable environment
   # rather than silently absent.
   acceptance:
+    name: Acceptance tests against a live server
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     environment: acceptance-tests
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Check out the repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
+      - name: Install pinned toolchain from .tool-versions
+        uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
         with:
           version: "2026.7.7"
           reshim: true
           cache_key_prefix: "mise-v1"
 
-      - run: mise run test-acceptance
+      - name: Run acceptance tests
+        run: mise run test-acceptance
         env:
           FIREZONE_ENDPOINT: ${{ secrets.FIREZONE_ENDPOINT }}
           FIREZONE_TOKEN: ${{ secrets.FIREZONE_TOKEN }}
