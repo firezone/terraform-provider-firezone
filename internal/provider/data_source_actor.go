@@ -47,25 +47,27 @@ func (d *actorDataSource) Metadata(_ context.Context, req datasource.MetadataReq
 
 func (d *actorDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Looks up an existing Actor by id or name. Exactly one of id or name must be set.",
+		Description: "Looks up an existing Actor by id, name, or email. Set id, or set name and/or " +
+			"email - id can't be combined with either.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Optional:    true,
 				Computed:    true,
-				Description: "Actor ID. Set this or name, not both.",
+				Description: "Actor ID. Can't be combined with name or email.",
 			},
 			"name": schema.StringAttribute{
 				Optional: true,
 				Computed: true,
-				Description: "Actor name. Set this or id, not both. Actor names aren't unique - " +
+				Description: "Actor name. Can't be combined with id. Actor names aren't unique - " +
 					"if more than one Actor shares this name, the lookup fails asking you to " +
 					"set email (or switch to id).",
 			},
 			"email": schema.StringAttribute{
 				Optional: true,
 				Computed: true,
-				Description: "Email address. Always populated in the result. When looking up by " +
-					"name, set this too to disambiguate if more than one Actor shares that name.",
+				Description: "Email address. Can't be combined with id. Unique per account and " +
+					"stable across renames, so it works as a lookup key on its own; combine it " +
+					"with name to disambiguate Actors sharing a name. Always populated in the result.",
 			},
 			"type": schema.StringAttribute{
 				Computed:    true,
@@ -83,9 +85,17 @@ func (d *actorDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, 
 	}
 }
 
+// ConfigValidators allows id, name, email, or name+email - but never id
+// alongside either of the others. Deliberately not ExactlyOneOf(id, name,
+// email): name+email is a supported combination, used to disambiguate
+// Actors sharing a name.
 func (d *actorDataSource) ConfigValidators(_ context.Context) []datasource.ConfigValidator {
 	return []datasource.ConfigValidator{
-		datasourcevalidator.ExactlyOneOf(path.MatchRoot("id"), path.MatchRoot("name")),
+		datasourcevalidator.AtLeastOneOf(
+			path.MatchRoot("id"), path.MatchRoot("name"), path.MatchRoot("email"),
+		),
+		datasourcevalidator.Conflicting(path.MatchRoot("id"), path.MatchRoot("name")),
+		datasourcevalidator.Conflicting(path.MatchRoot("id"), path.MatchRoot("email")),
 	}
 }
 
@@ -121,11 +131,13 @@ func (d *actorDataSource) Read(ctx context.Context, req datasource.ReadRequest, 
 			return
 		}
 
+		name := config.Name.ValueString()
+
 		switch len(matches) {
 		case 0:
 			resp.Diagnostics.AddError(
 				"Actor Not Found",
-				fmt.Sprintf("No Actor found with name %q%s.", config.Name.ValueString(), emailFilterSuffix(email)),
+				fmt.Sprintf("No Actor found with %s.", actorFilterDescription(name, email)),
 			)
 			return
 		case 1:
@@ -135,10 +147,17 @@ func (d *actorDataSource) Read(ctx context.Context, req datasource.ReadRequest, 
 			for i, m := range matches {
 				ids[i] = fmt.Sprintf("%s (email=%s)", m.ID, m.Email)
 			}
+			// Email is unique per account, so this branch is only
+			// really reachable for a name-only lookup - but the advice
+			// still has to make sense if email was already supplied.
+			advice := "Set email to disambiguate, or look the Actor up by id instead."
+			if email != "" {
+				advice = "Look the Actor up by id instead."
+			}
 			resp.Diagnostics.AddError(
-				"Ambiguous Actor Name",
-				fmt.Sprintf("%d Actors are named %q%s: %s. Set email to disambiguate, or look the Actor up by id instead.",
-					len(matches), config.Name.ValueString(), emailFilterSuffix(email), strings.Join(ids, ", ")),
+				"Ambiguous Actor Lookup",
+				fmt.Sprintf("%d Actors match %s: %s. %s",
+					len(matches), actorFilterDescription(name, email), strings.Join(ids, ", "), advice),
 			)
 			return
 		}
@@ -179,9 +198,16 @@ func findActorsByName(ctx context.Context, client *firezone.Client, name, email 
 	}
 }
 
-func emailFilterSuffix(email string) string {
-	if email == "" {
-		return ""
+// actorFilterDescription renders the filters actually supplied, so the
+// not-found and ambiguous messages describe the query the practitioner
+// wrote rather than assuming name is always set.
+func actorFilterDescription(name, email string) string {
+	switch {
+	case name != "" && email != "":
+		return fmt.Sprintf("name %q and email %q", name, email)
+	case email != "":
+		return fmt.Sprintf("email %q", email)
+	default:
+		return fmt.Sprintf("name %q", name)
 	}
-	return fmt.Sprintf(" with email = %q", email)
 }

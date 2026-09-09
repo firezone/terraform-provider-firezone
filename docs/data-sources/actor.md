@@ -3,18 +3,24 @@
 page_title: "firezone_actor Data Source - terraform-provider-firezone"
 subcategory: ""
 description: |-
-  Looks up an existing Actor by id or name. Exactly one of id or name must be set.
+  Looks up an existing Actor by id, name, or email. Set id, or set name and/or email - id can't be combined with either.
 ---
 
 # firezone_actor (Data Source)
 
-Looks up an existing Actor by id or name. Exactly one of id or name must be set.
+Looks up an existing Actor by id, name, or email. Set id, or set name and/or email - id can't be combined with either.
 
 ## Example Usage
 
 ```terraform
 data "firezone_actor" "existing_admin" {
   name = "Jane Doe"
+}
+
+# Email is unique per account and survives renames, so it works as a
+# lookup key on its own - usually a better choice than name.
+data "firezone_actor" "by_email" {
+  email = "jane.doe@example.com"
 }
 
 # Actor names aren't unique - if two Actors are both named "Jane Doe",
@@ -30,9 +36,9 @@ data "firezone_actor" "existing_admin_by_email" {
 
 ### Optional
 
-- `email` (String) Email address. Always populated in the result. When looking up by name, set this too to disambiguate if more than one Actor shares that name.
-- `id` (String) Actor ID. Set this or name, not both.
-- `name` (String) Actor name. Set this or id, not both. Actor names aren't unique - if more than one Actor shares this name, the lookup fails asking you to set email (or switch to id).
+- `email` (String) Email address. Can't be combined with id. Unique per account and stable across renames, so it works as a lookup key on its own; combine it with name to disambiguate Actors sharing a name. Always populated in the result.
+- `id` (String) Actor ID. Can't be combined with name or email.
+- `name` (String) Actor name. Can't be combined with id. Actor names aren't unique - if more than one Actor shares this name, the lookup fails asking you to set email (or switch to id).
 
 ### Read-Only
 
