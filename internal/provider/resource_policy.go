@@ -349,8 +349,13 @@ func parseTimeRange(value string) error {
 	// An overnight window is the reversed range a practitioner is most
 	// likely to write on purpose. The API does not wrap it - it has to
 	// be written as two ranges, one per day.
-	if startMinutes >= endMinutes {
-		return fmt.Errorf("time range %q ends at or before it starts; a window crossing "+
+	//
+	// Equality is allowed through: a zero-length range never matches,
+	// which looks like a mistake, but the API accepts it and parking a
+	// window without deleting the Policy is a plausible reason to write
+	// one. Only reversal is an error.
+	if startMinutes > endMinutes {
+		return fmt.Errorf("time range %q ends before it starts; a window crossing "+
 			"midnight must be split across two day values", value)
 	}
 
@@ -360,7 +365,7 @@ func parseTimeRange(value string) error {
 // parseClockTime converts "HH:MM" to minutes past midnight.
 func parseClockTime(value string) (int, error) {
 	hh, mm, ok := strings.Cut(value, ":")
-	if !ok || len(hh) != 2 || len(mm) != 2 {
+	if !ok || !isClockHour(hh) || !isClockMinute(mm) {
 		return 0, fmt.Errorf("time %q is not \"HH:MM\"", value)
 	}
 
@@ -374,6 +379,37 @@ func parseClockTime(value string) (int, error) {
 	}
 
 	return hours*60 + minutes, nil
+}
+
+// isClockHour reports whether s is one or two ASCII digits. The API
+// accepts an unpadded hour - "9:00" creates and reads back verbatim -
+// and writing it that way is ordinary, so requiring the pad here only
+// rejected values that work.
+func isClockHour(s string) bool {
+	return len(s) >= 1 && len(s) <= 2 && isDigits(s)
+}
+
+// isClockMinute reports whether s is exactly two ASCII digits. The API
+// accepts an unpadded minute too, but "9:5" parses as 9:05 while anyone
+// writing it almost certainly means 9:50. This is stricter than the API
+// on purpose: the value is ambiguous to the reader, not to the parser.
+func isClockMinute(s string) bool {
+	return len(s) == 2 && isDigits(s)
+}
+
+// isDigits reports whether s is non-empty and entirely ASCII digits.
+// Checked explicitly because strconv.Atoi accepts a leading "+", which
+// the API rejects.
+func isDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func (r *policyResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {

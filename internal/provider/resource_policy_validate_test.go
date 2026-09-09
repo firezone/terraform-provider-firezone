@@ -312,6 +312,23 @@ func TestPolicyResourceValidateConfig_DayTimeRangeValues(t *testing.T) {
 			values: []tftypes.Value{tftypes.NewValue(tftypes.String, "S/00:00-23:59/UTC")},
 		},
 
+		// An unpadded hour and a zero-length range create fine via the
+		// API and read back verbatim. The validator rejected them until
+		// E12; these pin the accepted forms so it can't regress again.
+		// An unpadded minute is rejected below - see that case.
+		{
+			name:   "unpadded hour",
+			values: []tftypes.Value{tftypes.NewValue(tftypes.String, "M/9:00-17:00/UTC")},
+		},
+		{
+			name:   "unpadded in a later range",
+			values: []tftypes.Value{tftypes.NewValue(tftypes.String, "M/09:00-12:00,9:00-17:00/UTC")},
+		},
+		{
+			name:   "zero-length range",
+			values: []tftypes.Value{tftypes.NewValue(tftypes.String, "M/09:00-09:00/UTC")},
+		},
+
 		// Every malformed shape reproduced against the API, each of
 		// which planned clean and 422'd at apply.
 		{
@@ -342,13 +359,7 @@ func TestPolicyResourceValidateConfig_DayTimeRangeValues(t *testing.T) {
 			name:        "range ends before it starts",
 			values:      []tftypes.Value{tftypes.NewValue(tftypes.String, "M/17:00-09:00/America/New_York")},
 			wantErr:     true,
-			wantErrPart: "ends at or before it starts",
-		},
-		{
-			name:        "empty range",
-			values:      []tftypes.Value{tftypes.NewValue(tftypes.String, "M/09:00-09:00/UTC")},
-			wantErr:     true,
-			wantErrPart: "ends at or before it starts",
+			wantErrPart: "ends before it starts",
 		},
 		{
 			name:        "minutes out of range",
@@ -357,8 +368,37 @@ func TestPolicyResourceValidateConfig_DayTimeRangeValues(t *testing.T) {
 			wantErrPart: `minute "60" is not in 00-59`,
 		},
 		{
-			name:        "single-digit hour",
-			values:      []tftypes.Value{tftypes.NewValue(tftypes.String, "M/9:00-17:00/UTC")},
+			// Stricter than the API on purpose: it accepts "09:5", but
+			// that parses as 09:05 while anyone writing it means 09:50.
+			name:        "unpadded minute",
+			values:      []tftypes.Value{tftypes.NewValue(tftypes.String, "M/09:5-17:00/UTC")},
+			wantErr:     true,
+			wantErrPart: "is not \"HH:MM\"",
+		},
+		{
+			name:        "unpadded hour and minute",
+			values:      []tftypes.Value{tftypes.NewValue(tftypes.String, "M/9:5-17:00/UTC")},
+			wantErr:     true,
+			wantErrPart: "is not \"HH:MM\"",
+		},
+		{
+			// Atoi would accept "+9" and three-digit components stay in
+			// range numerically, so these need explicit rejection - the
+			// API rejects all three.
+			name:        "three-digit hour",
+			values:      []tftypes.Value{tftypes.NewValue(tftypes.String, "M/009:00-17:00/UTC")},
+			wantErr:     true,
+			wantErrPart: "is not \"HH:MM\"",
+		},
+		{
+			name:        "three-digit minute",
+			values:      []tftypes.Value{tftypes.NewValue(tftypes.String, "M/09:000-17:00/UTC")},
+			wantErr:     true,
+			wantErrPart: "is not \"HH:MM\"",
+		},
+		{
+			name:        "signed hour",
+			values:      []tftypes.Value{tftypes.NewValue(tftypes.String, "M/+9:00-17:00/UTC")},
 			wantErr:     true,
 			wantErrPart: "is not \"HH:MM\"",
 		},
