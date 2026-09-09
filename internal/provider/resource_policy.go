@@ -4,7 +4,14 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
+	"time"
+	// Embeds the IANA timezone database so current_utc_datetime values
+	// validate identically on hosts without a system zoneinfo - notably
+	// Windows, where time.LoadLocation would otherwise fail for every
+	// zone.
+	_ "time/tzdata"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -38,7 +45,7 @@ var validOperatorsForProperty = map[string][]string{
 	"remote_ip_location_region": {"is_in", "is_not_in"},
 	"remote_ip":                 {"is_in_cidr", "is_not_in_cidr"},
 	"auth_provider_id":          {"is_in", "is_not_in"},
-	"current_utc_datetime":      {"is_in_day_of_week_time_ranges"},
+	propertyCurrentUTCDatetime:  {"is_in_day_of_week_time_ranges"},
 	"client_verified":           {"is"},
 }
 
@@ -185,6 +192,10 @@ func (r *policyResource) ValidateConfig(ctx context.Context, req resource.Valida
 		return
 	}
 
+	// Records the index of the first condition seen for each property,
+	// so a later duplicate can point back at it.
+	seen := make(map[string]int, len(config.Condition))
+
 	for i, condition := range config.Condition {
 		// Either value can come from an expression unresolved until
 		// apply. Defer rather than guess - the API still enforces this.
@@ -203,17 +214,161 @@ func (r *policyResource) ValidateConfig(ctx context.Context, req resource.Valida
 			// The property's own OneOf validator already reported this.
 			continue
 		}
-		if slices.Contains(valid, operator) {
+
+		if !slices.Contains(valid, operator) {
+			resp.Diagnostics.AddAttributeError(
+				path.Root("condition").AtListIndex(i).AtName("operator"),
+				"Invalid Attribute Combination",
+				fmt.Sprintf("operator %q does not apply to property %q. Valid operators for %q: %s.",
+					operator, property, property, strings.Join(valid, ", ")),
+			)
+		}
+
+		if first, dup := seen[property]; dup {
+			resp.Diagnostics.AddAttributeError(
+				path.Root("condition").AtListIndex(i).AtName("property"),
+				"Duplicate Condition Property",
+				fmt.Sprintf("property %q is already constrained by the condition at index %d. "+
+					"The API allows at most one condition per property - combine the values "+
+					"into a single block.", property, first),
+			)
+		} else {
+			seen[property] = i
+		}
+
+		if property == propertyCurrentUTCDatetime {
+			validateDayTimeRangeValues(ctx, condition.Values, i, &resp.Diagnostics)
+		}
+	}
+}
+
+// dayLetters are the day-of-week codes accepted in the leading segment
+// of a current_utc_datetime value, mirroring the API's own set.
+const dayLetters = "MTWRFSU"
+
+// propertyCurrentUTCDatetime is the one condition property whose values
+// carry structure the provider can check.
+const propertyCurrentUTCDatetime = "current_utc_datetime"
+
+// validateDayTimeRangeValues checks each element of a
+// current_utc_datetime condition's values against the
+// "DAY/TIME_RANGES/TIMEZONE" format.
+//
+// The API rejects a malformed value with a bare 422 naming no field, so
+// a Policy carrying a value per weekday says nothing about which one is
+// wrong. Report the offending element and its index instead.
+func validateDayTimeRangeValues(ctx context.Context, values types.List, conditionIndex int, diags *fwDiagnostics) {
+	if values.IsUnknown() || values.IsNull() {
+		return
+	}
+
+	var elements []types.String
+	// Deliberately dropped: a conversion failure here means the list
+	// isn't a list of strings, which the schema already rejects.
+	if d := values.ElementsAs(ctx, &elements, false); d.HasError() {
+		return
+	}
+
+	for j, element := range elements {
+		if element.IsUnknown() || element.IsNull() {
 			continue
 		}
 
-		resp.Diagnostics.AddAttributeError(
-			path.Root("condition").AtListIndex(i).AtName("operator"),
-			"Invalid Attribute Combination",
-			fmt.Sprintf("operator %q does not apply to property %q. Valid operators for %q: %s.",
-				operator, property, property, strings.Join(valid, ", ")),
+		err := parseDayTimeRange(element.ValueString())
+		if err == nil {
+			continue
+		}
+
+		diags.AddAttributeError(
+			path.Root("condition").AtListIndex(conditionIndex).AtName("values").AtListIndex(j),
+			"Invalid Condition Value",
+			fmt.Sprintf("%q is not a valid %s value: %s. Expected "+
+				"\"DAY/TIME_RANGES/TIMEZONE\" - DAY one of %s, TIME_RANGES a comma-separated "+
+				"list of HH:MM-HH:MM ranges, TIMEZONE an IANA name, e.g. "+
+				"\"M/09:00-17:00/America/New_York\".",
+				element.ValueString(), propertyCurrentUTCDatetime, err, strings.Join(strings.Split(dayLetters, ""), " ")),
 		)
 	}
+}
+
+// parseDayTimeRange reports why value is not a well-formed
+// "DAY/TIME_RANGES/TIMEZONE" string, or nil if it is.
+func parseDayTimeRange(value string) error {
+	// The timezone name contains slashes of its own, so everything past
+	// the second separator belongs to it.
+	parts := strings.SplitN(value, "/", 3)
+	if len(parts) != 3 {
+		return fmt.Errorf("expected 3 \"/\"-separated segments, got %d", len(parts))
+	}
+	day, ranges, timezone := parts[0], parts[1], parts[2]
+
+	if len(day) != 1 || !strings.Contains(dayLetters, day) {
+		return fmt.Errorf("day %q is not one of %s", day, strings.Join(strings.Split(dayLetters, ""), " "))
+	}
+
+	if ranges == "" {
+		return fmt.Errorf("time ranges are empty")
+	}
+	for _, r := range strings.Split(ranges, ",") {
+		if err := parseTimeRange(r); err != nil {
+			return err
+		}
+	}
+
+	if timezone == "" {
+		return fmt.Errorf("timezone is empty")
+	}
+	if _, err := time.LoadLocation(timezone); err != nil {
+		return fmt.Errorf("timezone %q is not an IANA timezone name", timezone)
+	}
+
+	return nil
+}
+
+// parseTimeRange checks a single "HH:MM-HH:MM" range.
+func parseTimeRange(value string) error {
+	start, end, ok := strings.Cut(value, "-")
+	if !ok {
+		return fmt.Errorf("time range %q is not \"HH:MM-HH:MM\"", value)
+	}
+
+	startMinutes, err := parseClockTime(start)
+	if err != nil {
+		return fmt.Errorf("time range %q: %w", value, err)
+	}
+	endMinutes, err := parseClockTime(end)
+	if err != nil {
+		return fmt.Errorf("time range %q: %w", value, err)
+	}
+
+	// An overnight window is the reversed range a practitioner is most
+	// likely to write on purpose. The API does not wrap it - it has to
+	// be written as two ranges, one per day.
+	if startMinutes >= endMinutes {
+		return fmt.Errorf("time range %q ends at or before it starts; a window crossing "+
+			"midnight must be split across two day values", value)
+	}
+
+	return nil
+}
+
+// parseClockTime converts "HH:MM" to minutes past midnight.
+func parseClockTime(value string) (int, error) {
+	hh, mm, ok := strings.Cut(value, ":")
+	if !ok || len(hh) != 2 || len(mm) != 2 {
+		return 0, fmt.Errorf("time %q is not \"HH:MM\"", value)
+	}
+
+	hours, err := strconv.Atoi(hh)
+	if err != nil || hours < 0 || hours > 23 {
+		return 0, fmt.Errorf("hour %q is not in 00-23", hh)
+	}
+	minutes, err := strconv.Atoi(mm)
+	if err != nil || minutes < 0 || minutes > 59 {
+		return 0, fmt.Errorf("minute %q is not in 00-59", mm)
+	}
+
+	return hours*60 + minutes, nil
 }
 
 func (r *policyResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {

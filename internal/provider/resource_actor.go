@@ -16,9 +16,17 @@ import (
 )
 
 var (
-	_ resource.Resource                = &actorResource{}
-	_ resource.ResourceWithImportState = &actorResource{}
-	_ resource.ResourceWithConfigure   = &actorResource{}
+	_ resource.Resource                   = &actorResource{}
+	_ resource.ResourceWithImportState    = &actorResource{}
+	_ resource.ResourceWithConfigure      = &actorResource{}
+	_ resource.ResourceWithValidateConfig = &actorResource{}
+)
+
+// Actor types, as accepted by the type attribute's OneOf validator.
+const (
+	actorTypeUser           = "account_user"
+	actorTypeAdminUser      = "account_admin_user"
+	actorTypeServiceAccount = "service_account"
 )
 
 // NewActorResource returns a new firezone_actor resource instance, for
@@ -76,7 +84,7 @@ func (r *actorResource) Schema(_ context.Context, _ resource.SchemaRequest, resp
 				Required:    true,
 				Description: "One of account_user, account_admin_user, service_account. api_client also exists but cannot be managed via this API.",
 				Validators: []validator.String{
-					stringvalidator.OneOf("account_user", "account_admin_user", "service_account"),
+					stringvalidator.OneOf(actorTypeUser, actorTypeAdminUser, actorTypeServiceAccount),
 				},
 			},
 			"allow_email_otp_sign_in": schema.BoolAttribute{
@@ -93,6 +101,60 @@ func (r *actorResource) Schema(_ context.Context, _ resource.SchemaRequest, resp
 			},
 		},
 	}
+}
+
+// ValidateConfig enforces email's dependence on type: it is required
+// for account_user and account_admin_user, and must be omitted for
+// service_account. The schema can't express that - email is Optional
+// either way, and neither attribute's validator can see the other.
+//
+// Without this the mistake surfaces as a 422 at apply time, after
+// earlier resources in the same apply have already been created - and
+// the API reports it against "type", which is the attribute the
+// practitioner got right.
+func (r *actorResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var config actorResourceModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// Either can come from an expression unresolved until apply. Defer
+	// rather than guess - the API still enforces the rule.
+	if config.Type.IsUnknown() || config.Email.IsUnknown() {
+		return
+	}
+	if config.Type.IsNull() {
+		return
+	}
+
+	actorType := config.Type.ValueString()
+	hasEmail := !config.Email.IsNull()
+
+	switch actorType {
+	case actorTypeServiceAccount:
+		if hasEmail {
+			resp.Diagnostics.AddAttributeError(
+				emailPath,
+				"Invalid Attribute Combination",
+				"email must be omitted when type is \""+actorTypeServiceAccount+"\". "+
+					"A service account has no mailbox, and the API rejects the request "+
+					"outright - reporting the error against \"type\" rather than here.",
+			)
+		}
+	case actorTypeUser, actorTypeAdminUser:
+		if !hasEmail {
+			resp.Diagnostics.AddAttributeError(
+				emailPath,
+				"Missing Required Attribute",
+				"email is required when type is \""+actorType+"\". "+
+					"Only \""+actorTypeServiceAccount+"\" Actors omit it. The API rejects the "+
+					"request outright - reporting the error against \"type\" rather than here.",
+			)
+		}
+	}
+	// An unrecognised type is already reported by the attribute's own
+	// OneOf validator; there is no rule to apply to it here.
 }
 
 func (r *actorResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
