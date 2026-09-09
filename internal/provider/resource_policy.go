@@ -93,7 +93,12 @@ func (r *policyResource) Metadata(_ context.Context, req resource.MetadataReques
 
 func (r *policyResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "A Policy - grants a Group access to a Resource, optionally restricted by conditions.",
+		Description: "A Policy - grants a Group access to a Resource, optionally restricted by conditions.\n\n" +
+			"At most one Policy may exist per (group_id, resource_id) pair. To grant a Group access " +
+			"to several Resources, write one Policy per Resource; to grant several Groups access to " +
+			"one Resource, write one Policy per Group. Two Policies on the same pair do not combine: " +
+			"the API rejects the second one. Conditions restricting the same grant belong on a single " +
+			"Policy, where they apply together.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:    true,

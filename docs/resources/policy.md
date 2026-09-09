@@ -4,11 +4,14 @@ page_title: "firezone_policy Resource - terraform-provider-firezone"
 subcategory: ""
 description: |-
   A Policy - grants a Group access to a Resource, optionally restricted by conditions.
+  At most one Policy may exist per (group_id, resource_id) pair. To grant a Group access to several Resources, write one Policy per Resource; to grant several Groups access to one Resource, write one Policy per Group. Two Policies on the same pair do not combine: the API rejects the second one. Conditions restricting the same grant belong on a single Policy, where they apply together.
 ---
 
 # firezone_policy (Resource)
 
 A Policy - grants a Group access to a Resource, optionally restricted by conditions.
+
+At most one Policy may exist per (group_id, resource_id) pair. To grant a Group access to several Resources, write one Policy per Resource; to grant several Groups access to one Resource, write one Policy per Group. Two Policies on the same pair do not combine: the API rejects the second one. Conditions restricting the same grant belong on a single Policy, where they apply together.
 
 ## Example Usage
 
