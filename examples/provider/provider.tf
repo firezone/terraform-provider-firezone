@@ -7,7 +7,7 @@ terraform {
 }
 
 provider "firezone" {
-  endpoint = "https://api.firezone.dev"
+  endpoint = "https://rest-api.firezone.dev"
   # token read from the FIREZONE_TOKEN environment variable
 
   # The API rate limits per account with a token bucket: roughly 20

@@ -65,7 +65,7 @@ func (p *FirezoneProvider) Schema(_ context.Context, _ provider.SchemaRequest, r
 		Attributes: map[string]schema.Attribute{
 			"endpoint": schema.StringAttribute{
 				Optional: true,
-				Description: "The bare Firezone API host, e.g. https://api.firezone.dev. " +
+				Description: "The bare Firezone API host, e.g. https://rest-api.firezone.dev. " +
 					"Defaults to the FIREZONE_ENDPOINT environment variable.",
 			},
 			"token": schema.StringAttribute{
