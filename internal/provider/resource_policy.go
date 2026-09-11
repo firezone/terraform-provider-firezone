@@ -47,6 +47,7 @@ var validOperatorsForProperty = map[string][]string{
 	"auth_provider_id":          {"is_in", "is_not_in"},
 	propertyCurrentUTCDatetime:  {"is_in_day_of_week_time_ranges"},
 	"client_verified":           {"is"},
+	"device_attested":           {"is"},
 }
 
 // NewPolicyResource returns a new firezone_policy resource instance,
@@ -142,8 +143,10 @@ func (r *policyResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 				NestedObject: schema.NestedBlockObject{
 					Attributes: map[string]schema.Attribute{
 						"property": schema.StringAttribute{
-							Required:    true,
-							Description: "One of remote_ip_location_region, remote_ip, auth_provider_id, current_utc_datetime, client_verified.",
+							Required: true,
+							Description: "One of remote_ip_location_region, remote_ip, auth_provider_id, current_utc_datetime, client_verified, device_attested. " +
+								"client_verified matches a device an admin has marked verified; device_attested matches a Client " +
+								"that presented a valid X.509 certificate from one of the account's trust anchors on its current connection.",
 							Validators: []validator.String{
 								stringvalidator.OneOf(
 									"remote_ip_location_region",
@@ -151,6 +154,7 @@ func (r *policyResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 									"auth_provider_id",
 									"current_utc_datetime",
 									"client_verified",
+									"device_attested",
 								),
 							},
 						},
@@ -176,7 +180,8 @@ func (r *policyResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 								"current_utc_datetime, each value is a \"DAY/TIME_RANGES/TIMEZONE\" string " +
 								"where DAY is one of M T W R F S U, TIME_RANGES is a comma-separated list " +
 								"of HH:MM-HH:MM ranges, and TIMEZONE is an IANA timezone name - e.g. " +
-								"\"M/09:00-17:00/America/New_York\". One value per day.",
+								"\"M/09:00-17:00/America/New_York\". One value per day. For client_verified " +
+								"and device_attested, a single value of \"true\" or \"false\".",
 						},
 					},
 				},
@@ -243,8 +248,11 @@ func (r *policyResource) ValidateConfig(ctx context.Context, req resource.Valida
 			seen[property] = i
 		}
 
-		if property == propertyCurrentUTCDatetime {
+		switch {
+		case property == propertyCurrentUTCDatetime:
 			validateDayTimeRangeValues(ctx, condition.Values, i, &resp.Diagnostics)
+		case slices.Contains(booleanValueProperties, property):
+			validateBooleanValues(ctx, property, condition.Values, i, &resp.Diagnostics)
 		}
 	}
 }
@@ -253,9 +261,51 @@ func (r *policyResource) ValidateConfig(ctx context.Context, req resource.Valida
 // of a current_utc_datetime value, mirroring the API's own set.
 const dayLetters = "MTWRFSU"
 
-// propertyCurrentUTCDatetime is the one condition property whose values
-// carry structure the provider can check.
+// propertyCurrentUTCDatetime is the condition property whose values carry
+// a "DAY/TIME_RANGES/TIMEZONE" structure the provider can check.
 const propertyCurrentUTCDatetime = "current_utc_datetime"
+
+// booleanValueProperties are the condition properties whose values are a
+// single-element list holding "true" or "false".
+var booleanValueProperties = []string{"client_verified", "device_attested"}
+
+// validateBooleanValues checks that a client_verified or device_attested
+// condition carries exactly one value, "true" or "false". Anything else
+// is a 422 at apply time, after earlier resources in the same apply have
+// already been created.
+func validateBooleanValues(ctx context.Context, property string, values types.List, conditionIndex int, diags *fwDiagnostics) {
+	if values.IsUnknown() || values.IsNull() {
+		return
+	}
+
+	var elements []types.String
+	// Deliberately dropped: a conversion failure here means the list
+	// isn't a list of strings, which the schema already rejects.
+	if d := values.ElementsAs(ctx, &elements, false); d.HasError() {
+		return
+	}
+
+	if len(elements) != 1 {
+		diags.AddAttributeError(
+			path.Root("condition").AtListIndex(conditionIndex).AtName("values"),
+			"Invalid Condition Value",
+			fmt.Sprintf("%s takes exactly one value, \"true\" or \"false\"; got %d.", property, len(elements)),
+		)
+		return
+	}
+
+	element := elements[0]
+	if element.IsUnknown() || element.IsNull() {
+		return
+	}
+	if value := element.ValueString(); value != "true" && value != "false" {
+		diags.AddAttributeError(
+			path.Root("condition").AtListIndex(conditionIndex).AtName("values").AtListIndex(0),
+			"Invalid Condition Value",
+			fmt.Sprintf("%q is not a valid %s value. Expected \"true\" or \"false\".", value, property),
+		)
+	}
+}
 
 // validateDayTimeRangeValues checks each element of a
 // current_utc_datetime condition's values against the

@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -31,15 +32,20 @@ func TestPolicyResourceValidateConfig(t *testing.T) {
 	conditionType := conditionListType.ElementType.(tftypes.Object)
 
 	condition := func(property, operator tftypes.Value) tftypes.Value {
-		// current_utc_datetime values carry a format ValidateConfig
-		// checks; every other property's are opaque to it. Keep this
-		// helper's values valid so the pairing assertions below fail
-		// only on the pairing.
+		// current_utc_datetime, client_verified, and device_attested
+		// values carry formats ValidateConfig checks; every other
+		// property's are opaque to it. Keep this helper's values valid so
+		// the pairing assertions below fail only on the pairing.
 		value := "x"
 		if property.IsKnown() && !property.IsNull() {
 			var s string
-			if err := property.As(&s); err == nil && s == propertyCurrentUTCDatetime {
-				value = "M/09:00-17:00/America/New_York"
+			if err := property.As(&s); err == nil {
+				switch {
+				case s == propertyCurrentUTCDatetime:
+					value = "M/09:00-17:00/America/New_York"
+				case slices.Contains(booleanValueProperties, s):
+					value = "true"
+				}
 			}
 		}
 
@@ -92,6 +98,10 @@ func TestPolicyResourceValidateConfig(t *testing.T) {
 			name:       "client_verified is",
 			conditions: []tftypes.Value{condition(str("client_verified"), str("is"))},
 		},
+		{
+			name:       "device_attested is",
+			conditions: []tftypes.Value{condition(str("device_attested"), str("is"))},
+		},
 
 		// Mismatches: each operator is individually valid, so only the
 		// pairing check catches these.
@@ -112,6 +122,12 @@ func TestPolicyResourceValidateConfig(t *testing.T) {
 			conditions:  []tftypes.Value{condition(str("client_verified"), str("is_in"))},
 			wantErr:     true,
 			wantErrPart: `operator "is_in" does not apply`,
+		},
+		{
+			name:        "device_attested with is_in",
+			conditions:  []tftypes.Value{condition(str("device_attested"), str("is_in"))},
+			wantErr:     true,
+			wantErrPart: `Valid operators for "device_attested": is.`,
 		},
 		{
 			name:        "region with is_in_cidr",
@@ -251,6 +267,7 @@ func TestValidOperatorsForProperty_CoversEveryProperty(t *testing.T) {
 		"auth_provider_id",
 		"current_utc_datetime",
 		"client_verified",
+		"device_attested",
 	}
 
 	for _, property := range properties {
@@ -262,6 +279,121 @@ func TestValidOperatorsForProperty_CoversEveryProperty(t *testing.T) {
 		t.Errorf("validOperatorsForProperty has %d entries, want %d - a property was added "+
 			"to the map without updating this test, or vice versa",
 			len(validOperatorsForProperty), len(properties))
+	}
+}
+
+// TestPolicyResourceValidateConfig_BooleanValues covers the single
+// "true"/"false" value carried by client_verified and device_attested.
+func TestPolicyResourceValidateConfig_BooleanValues(t *testing.T) {
+	ctx := context.Background()
+
+	schemaResp := &fwresource.SchemaResponse{}
+	(&policyResource{}).Schema(ctx, fwresource.SchemaRequest{}, schemaResp)
+	if schemaResp.Diagnostics.HasError() {
+		t.Fatalf("Schema returned diagnostics: %v", schemaResp.Diagnostics)
+	}
+	schema := schemaResp.Schema
+	objType := schema.Type().TerraformType(ctx).(tftypes.Object)
+	conditionListType := objType.AttributeTypes["condition"].(tftypes.List)
+	conditionType := conditionListType.ElementType.(tftypes.Object)
+	str := func(s string) tftypes.Value { return tftypes.NewValue(tftypes.String, s) }
+
+	tests := []struct {
+		name        string
+		values      []tftypes.Value
+		wantErr     bool
+		wantErrPart string
+		wantPath    string
+	}{
+		{name: "true", values: []tftypes.Value{str("true")}},
+		{name: "false", values: []tftypes.Value{str("false")}},
+		{
+			name:   "unknown element defers",
+			values: []tftypes.Value{tftypes.NewValue(tftypes.String, tftypes.UnknownValue)},
+		},
+		{
+			name:        "not a boolean",
+			values:      []tftypes.Value{str("yes")},
+			wantErr:     true,
+			wantErrPart: `"yes" is not a valid`,
+			wantPath:    "condition[0].values[0]",
+		},
+		{
+			name:        "wrong case",
+			values:      []tftypes.Value{str("True")},
+			wantErr:     true,
+			wantErrPart: `"True" is not a valid`,
+			wantPath:    "condition[0].values[0]",
+		},
+		{
+			name:        "no values",
+			values:      []tftypes.Value{},
+			wantErr:     true,
+			wantErrPart: "takes exactly one value",
+			wantPath:    "condition[0].values",
+		},
+		{
+			name:        "two values",
+			values:      []tftypes.Value{str("true"), str("false")},
+			wantErr:     true,
+			wantErrPart: "got 2",
+			wantPath:    "condition[0].values",
+		},
+	}
+
+	for _, property := range booleanValueProperties {
+		for _, tt := range tests {
+			t.Run(property+"/"+tt.name, func(t *testing.T) {
+				raw := tftypes.NewValue(objType, map[string]tftypes.Value{
+					"id":                       tftypes.NewValue(tftypes.String, nil),
+					"group_id":                 str("group-1"),
+					"resource_id":              str("res-1"),
+					"description":              tftypes.NewValue(tftypes.String, nil),
+					"flow_log_uploads_enabled": tftypes.NewValue(tftypes.Bool, nil),
+					"enabled":                  tftypes.NewValue(tftypes.Bool, nil),
+					"condition": tftypes.NewValue(conditionListType, []tftypes.Value{
+						tftypes.NewValue(conditionType, map[string]tftypes.Value{
+							"property": str(property),
+							"operator": str("is"),
+							"values": tftypes.NewValue(
+								tftypes.List{ElementType: tftypes.String},
+								tt.values,
+							),
+						}),
+					}),
+				})
+
+				resp := &fwresource.ValidateConfigResponse{}
+				(&policyResource{}).ValidateConfig(ctx,
+					fwresource.ValidateConfigRequest{
+						Config: tfsdk.Config{Raw: raw, Schema: schema},
+					},
+					resp,
+				)
+
+				if got := resp.Diagnostics.HasError(); got != tt.wantErr {
+					t.Fatalf("HasError() = %v, want %v (diags: %v)", got, tt.wantErr, resp.Diagnostics)
+				}
+				if !tt.wantErr {
+					return
+				}
+
+				for _, d := range resp.Diagnostics.Errors() {
+					if !strings.Contains(d.Detail(), tt.wantErrPart) {
+						continue
+					}
+					withPath, ok := d.(diag.DiagnosticWithPath)
+					if !ok {
+						t.Fatalf("diagnostic %v carries no path, want %q", d, tt.wantPath)
+					}
+					if got := withPath.Path().String(); got != tt.wantPath {
+						t.Errorf("diagnostic path = %q, want %q", got, tt.wantPath)
+					}
+					return
+				}
+				t.Errorf("diagnostics = %v, want one mentioning %q", resp.Diagnostics, tt.wantErrPart)
+			})
+		}
 	}
 }
 

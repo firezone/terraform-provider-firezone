@@ -60,5 +60,5 @@ resource "firezone_policy" "engineering_app_access" {
 Required:
 
 - `operator` (String) One of is_in, is_not_in, is_in_cidr, is_not_in_cidr, is_in_day_of_week_time_ranges, is. Which are valid depends on property.
-- `property` (String) One of remote_ip_location_region, remote_ip, auth_provider_id, current_utc_datetime, client_verified.
-- `values` (List of String) Values to compare against, interpreted per property. For current_utc_datetime, each value is a "DAY/TIME_RANGES/TIMEZONE" string where DAY is one of M T W R F S U, TIME_RANGES is a comma-separated list of HH:MM-HH:MM ranges, and TIMEZONE is an IANA timezone name - e.g. "M/09:00-17:00/America/New_York". One value per day.
+- `property` (String) One of remote_ip_location_region, remote_ip, auth_provider_id, current_utc_datetime, client_verified, device_attested. client_verified matches a device an admin has marked verified; device_attested matches a Client that presented a valid X.509 certificate from one of the account's trust anchors on its current connection.
+- `values` (List of String) Values to compare against, interpreted per property. For current_utc_datetime, each value is a "DAY/TIME_RANGES/TIMEZONE" string where DAY is one of M T W R F S U, TIME_RANGES is a comma-separated list of HH:MM-HH:MM ranges, and TIMEZONE is an IANA timezone name - e.g. "M/09:00-17:00/America/New_York". One value per day. For client_verified and device_attested, a single value of "true" or "false".
