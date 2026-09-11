@@ -52,13 +52,6 @@ var validOperatorsForProperty = map[string][]string{
 // NewPolicyResource returns a new firezone_policy resource instance,
 // for use with FirezoneProvider.Resources.
 //
-// This resource does not yet expose an "enabled" attribute. It couldn't
-// before: Policy responses carried no enabled/disabled state, so the
-// value would have been settable but never verifiable. That's no longer
-// true - PortalAPI.PolicyJSON now returns is_disabled, and the API takes
-// it on update - so the attribute is now implementable and simply hasn't
-// been added.
-//
 // Do not reintroduce calls to POST /policies/{id}/enable or /disable:
 // those endpoints were removed in favor of the generic update.
 func NewPolicyResource() resource.Resource {
@@ -84,6 +77,7 @@ type policyResourceModel struct {
 	ResourceID            types.String           `tfsdk:"resource_id"`
 	Description           types.String           `tfsdk:"description"`
 	FlowLogUploadsEnabled types.Bool             `tfsdk:"flow_log_uploads_enabled"`
+	Enabled               types.Bool             `tfsdk:"enabled"`
 	Condition             []policyConditionModel `tfsdk:"condition"`
 }
 
@@ -132,6 +126,14 @@ func (r *policyResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 				Computed:    true,
 				Default:     booldefault.StaticBool(true),
 				Description: "Whether flow logs are uploaded for connections authorized by this Policy.",
+			},
+			"enabled": schema.BoolAttribute{
+				Optional: true,
+				Computed: true,
+				Default:  booldefault.StaticBool(true),
+				Description: "Whether this Policy grants access. Set false to stop it granting access " +
+					"without deleting it. Defaults to true, so a Policy disabled outside Terraform " +
+					"is re-enabled on the next apply unless this is set to false.",
 			},
 		},
 		Blocks: map[string]schema.Block{
@@ -434,11 +436,15 @@ func (r *policyResource) Create(ctx context.Context, req resource.CreateRequest,
 	}
 
 	flowLogUploadsEnabled := plan.FlowLogUploadsEnabled.ValueBool()
+	// Sent on create rather than disabling afterwards, so a Policy
+	// planned as disabled never grants access, even briefly.
+	isDisabled := !plan.Enabled.ValueBool()
 	created, err := r.client.Policies.Create(ctx, &firezone.CreatePolicyRequest{
 		GroupID:               plan.GroupID.ValueString(),
 		ResourceID:            plan.ResourceID.ValueString(),
 		Description:           plan.Description.ValueString(),
 		FlowLogUploadsEnabled: &flowLogUploadsEnabled,
+		IsDisabled:            &isDisabled,
 		Conditions:            conditions,
 	})
 	if err != nil {
@@ -493,11 +499,13 @@ func (r *policyResource) Update(ctx context.Context, req resource.UpdateRequest,
 	}
 
 	flowLogUploadsEnabled := plan.FlowLogUploadsEnabled.ValueBool()
+	isDisabled := !plan.Enabled.ValueBool()
 	updated, err := r.client.Policies.Update(ctx, plan.ID.ValueString(), &firezone.UpdatePolicyRequest{
 		GroupID:               plan.GroupID.ValueString(),
 		ResourceID:            plan.ResourceID.ValueString(),
 		Description:           nullableString(plan.Description),
 		FlowLogUploadsEnabled: &flowLogUploadsEnabled,
+		IsDisabled:            &isDisabled,
 		Conditions:            &conditions,
 	})
 	if err != nil {
@@ -543,6 +551,7 @@ func policyModelFromAPI(ctx context.Context, pol *firezone.Policy, model *policy
 		model.Description = types.StringValue(pol.Description)
 	}
 	model.FlowLogUploadsEnabled = types.BoolValue(pol.FlowLogUploadsEnabled)
+	model.Enabled = types.BoolValue(!pol.IsDisabled)
 
 	conditions, diags := conditionsToModel(ctx, pol.Conditions)
 	model.Condition = conditions

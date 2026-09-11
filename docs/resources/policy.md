@@ -47,6 +47,7 @@ resource "firezone_policy" "engineering_app_access" {
 
 - `condition` (Block List) Restricts when this Policy grants access. See the Firezone API's policy documentation for which operators are valid for each property and how values is interpreted. (see [below for nested schema](#nestedblock--condition))
 - `description` (String) Human-readable description of why this access is granted.
+- `enabled` (Boolean) Whether this Policy grants access. Set false to stop it granting access without deleting it. Defaults to true, so a Policy disabled outside Terraform is re-enabled on the next apply unless this is set to false.
 - `flow_log_uploads_enabled` (Boolean) Whether flow logs are uploaded for connections authorized by this Policy.
 
 ### Read-Only

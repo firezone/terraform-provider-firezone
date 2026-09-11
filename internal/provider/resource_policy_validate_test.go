@@ -195,6 +195,7 @@ func TestPolicyResourceValidateConfig(t *testing.T) {
 				"resource_id":              str("res-1"),
 				"description":              tftypes.NewValue(tftypes.String, nil),
 				"flow_log_uploads_enabled": tftypes.NewValue(tftypes.Bool, nil),
+				"enabled":                  tftypes.NewValue(tftypes.Bool, nil),
 				"condition":                conditions,
 			})
 
@@ -445,6 +446,7 @@ func TestPolicyResourceValidateConfig_DayTimeRangeValues(t *testing.T) {
 				"resource_id":              tftypes.NewValue(tftypes.String, "res-1"),
 				"description":              tftypes.NewValue(tftypes.String, nil),
 				"flow_log_uploads_enabled": tftypes.NewValue(tftypes.Bool, nil),
+				"enabled":                  tftypes.NewValue(tftypes.Bool, nil),
 				"condition": tftypes.NewValue(conditionListType, []tftypes.Value{
 					tftypes.NewValue(conditionType, map[string]tftypes.Value{
 						"property": tftypes.NewValue(tftypes.String, propertyCurrentUTCDatetime),
