@@ -47,17 +47,11 @@ var validOperatorsForProperty = map[string][]string{
 	"auth_provider_id":          {"is_in", "is_not_in"},
 	propertyCurrentUTCDatetime:  {"is_in_day_of_week_time_ranges"},
 	"client_verified":           {"is"},
+	"device_attested":           {"is"},
 }
 
 // NewPolicyResource returns a new firezone_policy resource instance,
 // for use with FirezoneProvider.Resources.
-//
-// This resource does not yet expose an "enabled" attribute. It couldn't
-// before: Policy responses carried no enabled/disabled state, so the
-// value would have been settable but never verifiable. That's no longer
-// true - PortalAPI.PolicyJSON now returns is_disabled, and the API takes
-// it on update - so the attribute is now implementable and simply hasn't
-// been added.
 //
 // Do not reintroduce calls to POST /policies/{id}/enable or /disable:
 // those endpoints were removed in favor of the generic update.
@@ -84,6 +78,7 @@ type policyResourceModel struct {
 	ResourceID            types.String           `tfsdk:"resource_id"`
 	Description           types.String           `tfsdk:"description"`
 	FlowLogUploadsEnabled types.Bool             `tfsdk:"flow_log_uploads_enabled"`
+	Enabled               types.Bool             `tfsdk:"enabled"`
 	Condition             []policyConditionModel `tfsdk:"condition"`
 }
 
@@ -133,6 +128,14 @@ func (r *policyResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 				Default:     booldefault.StaticBool(true),
 				Description: "Whether flow logs are uploaded for connections authorized by this Policy.",
 			},
+			"enabled": schema.BoolAttribute{
+				Optional: true,
+				Computed: true,
+				Default:  booldefault.StaticBool(true),
+				Description: "Whether this Policy grants access. Set false to stop it granting access " +
+					"without deleting it. Defaults to true, so a Policy disabled outside Terraform " +
+					"is re-enabled on the next apply unless this is set to false.",
+			},
 		},
 		Blocks: map[string]schema.Block{
 			"condition": schema.ListNestedBlock{
@@ -140,8 +143,10 @@ func (r *policyResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 				NestedObject: schema.NestedBlockObject{
 					Attributes: map[string]schema.Attribute{
 						"property": schema.StringAttribute{
-							Required:    true,
-							Description: "One of remote_ip_location_region, remote_ip, auth_provider_id, current_utc_datetime, client_verified.",
+							Required: true,
+							Description: "One of remote_ip_location_region, remote_ip, auth_provider_id, current_utc_datetime, client_verified, device_attested. " +
+								"client_verified matches a device an admin has marked verified; device_attested matches a Client " +
+								"that presented a valid X.509 certificate from one of the account's trust anchors on its current connection.",
 							Validators: []validator.String{
 								stringvalidator.OneOf(
 									"remote_ip_location_region",
@@ -149,6 +154,7 @@ func (r *policyResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 									"auth_provider_id",
 									"current_utc_datetime",
 									"client_verified",
+									"device_attested",
 								),
 							},
 						},
@@ -174,7 +180,8 @@ func (r *policyResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 								"current_utc_datetime, each value is a \"DAY/TIME_RANGES/TIMEZONE\" string " +
 								"where DAY is one of M T W R F S U, TIME_RANGES is a comma-separated list " +
 								"of HH:MM-HH:MM ranges, and TIMEZONE is an IANA timezone name - e.g. " +
-								"\"M/09:00-17:00/America/New_York\". One value per day.",
+								"\"M/09:00-17:00/America/New_York\". One value per day. For client_verified " +
+								"and device_attested, a single value of \"true\" or \"false\".",
 						},
 					},
 				},
@@ -241,8 +248,11 @@ func (r *policyResource) ValidateConfig(ctx context.Context, req resource.Valida
 			seen[property] = i
 		}
 
-		if property == propertyCurrentUTCDatetime {
+		switch {
+		case property == propertyCurrentUTCDatetime:
 			validateDayTimeRangeValues(ctx, condition.Values, i, &resp.Diagnostics)
+		case slices.Contains(booleanValueProperties, property):
+			validateBooleanValues(ctx, property, condition.Values, i, &resp.Diagnostics)
 		}
 	}
 }
@@ -251,9 +261,51 @@ func (r *policyResource) ValidateConfig(ctx context.Context, req resource.Valida
 // of a current_utc_datetime value, mirroring the API's own set.
 const dayLetters = "MTWRFSU"
 
-// propertyCurrentUTCDatetime is the one condition property whose values
-// carry structure the provider can check.
+// propertyCurrentUTCDatetime is the condition property whose values carry
+// a "DAY/TIME_RANGES/TIMEZONE" structure the provider can check.
 const propertyCurrentUTCDatetime = "current_utc_datetime"
+
+// booleanValueProperties are the condition properties whose values are a
+// single-element list holding "true" or "false".
+var booleanValueProperties = []string{"client_verified", "device_attested"}
+
+// validateBooleanValues checks that a client_verified or device_attested
+// condition carries exactly one value, "true" or "false". Anything else
+// is a 422 at apply time, after earlier resources in the same apply have
+// already been created.
+func validateBooleanValues(ctx context.Context, property string, values types.List, conditionIndex int, diags *fwDiagnostics) {
+	if values.IsUnknown() || values.IsNull() {
+		return
+	}
+
+	var elements []types.String
+	// Deliberately dropped: a conversion failure here means the list
+	// isn't a list of strings, which the schema already rejects.
+	if d := values.ElementsAs(ctx, &elements, false); d.HasError() {
+		return
+	}
+
+	if len(elements) != 1 {
+		diags.AddAttributeError(
+			path.Root("condition").AtListIndex(conditionIndex).AtName("values"),
+			"Invalid Condition Value",
+			fmt.Sprintf("%s takes exactly one value, \"true\" or \"false\"; got %d.", property, len(elements)),
+		)
+		return
+	}
+
+	element := elements[0]
+	if element.IsUnknown() || element.IsNull() {
+		return
+	}
+	if value := element.ValueString(); value != "true" && value != "false" {
+		diags.AddAttributeError(
+			path.Root("condition").AtListIndex(conditionIndex).AtName("values").AtListIndex(0),
+			"Invalid Condition Value",
+			fmt.Sprintf("%q is not a valid %s value. Expected \"true\" or \"false\".", value, property),
+		)
+	}
+}
 
 // validateDayTimeRangeValues checks each element of a
 // current_utc_datetime condition's values against the
@@ -434,11 +486,15 @@ func (r *policyResource) Create(ctx context.Context, req resource.CreateRequest,
 	}
 
 	flowLogUploadsEnabled := plan.FlowLogUploadsEnabled.ValueBool()
+	// Sent on create rather than disabling afterwards, so a Policy
+	// planned as disabled never grants access, even briefly.
+	isDisabled := !plan.Enabled.ValueBool()
 	created, err := r.client.Policies.Create(ctx, &firezone.CreatePolicyRequest{
 		GroupID:               plan.GroupID.ValueString(),
 		ResourceID:            plan.ResourceID.ValueString(),
 		Description:           plan.Description.ValueString(),
 		FlowLogUploadsEnabled: &flowLogUploadsEnabled,
+		IsDisabled:            &isDisabled,
 		Conditions:            conditions,
 	})
 	if err != nil {
@@ -493,11 +549,13 @@ func (r *policyResource) Update(ctx context.Context, req resource.UpdateRequest,
 	}
 
 	flowLogUploadsEnabled := plan.FlowLogUploadsEnabled.ValueBool()
+	isDisabled := !plan.Enabled.ValueBool()
 	updated, err := r.client.Policies.Update(ctx, plan.ID.ValueString(), &firezone.UpdatePolicyRequest{
 		GroupID:               plan.GroupID.ValueString(),
 		ResourceID:            plan.ResourceID.ValueString(),
 		Description:           nullableString(plan.Description),
 		FlowLogUploadsEnabled: &flowLogUploadsEnabled,
+		IsDisabled:            &isDisabled,
 		Conditions:            &conditions,
 	})
 	if err != nil {
@@ -543,6 +601,7 @@ func policyModelFromAPI(ctx context.Context, pol *firezone.Policy, model *policy
 		model.Description = types.StringValue(pol.Description)
 	}
 	model.FlowLogUploadsEnabled = types.BoolValue(pol.FlowLogUploadsEnabled)
+	model.Enabled = types.BoolValue(!pol.IsDisabled)
 
 	conditions, diags := conditionsToModel(ctx, pol.Conditions)
 	model.Condition = conditions

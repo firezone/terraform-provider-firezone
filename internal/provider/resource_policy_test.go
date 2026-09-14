@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"strconv"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
@@ -15,9 +16,10 @@ func TestAccPolicyResource(t *testing.T) {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
-				Config: testAccPolicyResourceConfig("eng access"),
+				Config: testAccPolicyResourceConfig("eng access", true),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("firezone_policy.test", "description", "eng access"),
+					resource.TestCheckResourceAttr("firezone_policy.test", "enabled", "true"),
 					resource.TestCheckResourceAttr("firezone_policy.test", "condition.0.property", "remote_ip_location_region"),
 					resource.TestCheckResourceAttr("firezone_policy.test", "condition.0.values.0", "US"),
 					// Second condition block: covers both multi-condition
@@ -35,16 +37,51 @@ func TestAccPolicyResource(t *testing.T) {
 				ImportStateVerify: true,
 			},
 			{
-				Config: testAccPolicyResourceConfig("eng access, updated"),
+				Config: testAccPolicyResourceConfig("eng access, updated", true),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("firezone_policy.test", "description", "eng access, updated"),
+				),
+			},
+			{
+				Config: testAccPolicyResourceConfig("eng access, updated", false),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("firezone_policy.test", "enabled", "false"),
+				),
+			},
+			{
+				Config: testAccPolicyResourceConfig("eng access, updated", true),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("firezone_policy.test", "enabled", "true"),
 				),
 			},
 		},
 	})
 }
 
-func testAccPolicyResourceConfig(description string) string {
+// TestAccPolicyResource_CreateDisabled covers creating a Policy that is
+// disabled from the start, which the API takes on create - there is no
+// window where it grants access before a follow-up disable.
+func TestAccPolicyResource_CreateDisabled(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccPolicyResourceConfig("disabled from the start", false),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("firezone_policy.test", "enabled", "false"),
+				),
+			},
+			{
+				ResourceName:      "firezone_policy.test",
+				ImportState:       true,
+				ImportStateVerify: true,
+			},
+		},
+	})
+}
+
+func testAccPolicyResourceConfig(description string, enabled bool) string {
 	return `
 resource "firezone_site" "test" {
   name = "acc-test-site"
@@ -65,6 +102,7 @@ resource "firezone_policy" "test" {
   group_id    = firezone_group.test.id
   resource_id = firezone_resource.test.id
   description = "` + description + `"
+  enabled     = ` + strconv.FormatBool(enabled) + `
 
   condition {
     property = "remote_ip_location_region"
@@ -115,6 +153,33 @@ func TestPolicyModelFromAPI_DescriptionNullVsEmpty(t *testing.T) {
 			}
 			if !tt.wantNull && model.Description.ValueString() != tt.wantString {
 				t.Errorf("Description = %q, want %q", model.Description.ValueString(), tt.wantString)
+			}
+		})
+	}
+}
+
+// TestPolicyModelFromAPI_Enabled pins that enabled is the inverse of the
+// API's is_disabled.
+func TestPolicyModelFromAPI_Enabled(t *testing.T) {
+	tests := []struct {
+		name       string
+		isDisabled bool
+		want       bool
+	}{
+		{name: "enabled policy", isDisabled: false, want: true},
+		{name: "disabled policy", isDisabled: true, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var model policyResourceModel
+			diags := policyModelFromAPI(context.Background(), &firezone.Policy{IsDisabled: tt.isDisabled}, &model)
+			if diags.HasError() {
+				t.Fatalf("policyModelFromAPI returned diagnostics: %v", diags)
+			}
+
+			if got := model.Enabled.ValueBool(); got != tt.want {
+				t.Errorf("Enabled = %v, want %v", got, tt.want)
 			}
 		})
 	}
