@@ -2,7 +2,7 @@
 
 A Terraform provider for [Firezone](https://www.firezone.dev), built on
 `terraform-plugin-framework` and the
-[`firezone-sdk-go`](https://github.com/firezone/firezone-sdk-go) SDK
+[`firezone-go`](https://github.com/firezone/firezone-go) SDK
 
 Manages Sites, Gateways, Resources, Policies, Groups, Group Memberships,
 and Actors as resources. Looks up Sites, Groups, Actors, and IdP-synced
@@ -231,7 +231,6 @@ Acceptance tests need a running `firezone/firezone` dev server (Postgres
 `elixir/script/seed_api_client_token.exs`; see "Local development"
 above.
 
-
 ## Device pools
 
 Use `firezone_resource` with `type = "device_pool"`. Pools have no Site or
@@ -256,5 +255,3 @@ When upgrading existing pools, change `type = "static_device_pool"` to
 under the existing ID; no replacement or state editing is required. Leave
 criteria omitted if you already use `firezone_pool_member`. Existing pools can
 also be imported by Resource UUID.
-
-The [REST API coverage audit](REST_API_COVERAGE.md) tracks remaining provider gaps.
