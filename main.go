@@ -2,7 +2,7 @@
 // Firezone (https://www.firezone.dev).
 package main
 
-//go:generate go tool tfplugindocs generate
+//go:generate go tool tfplugindocs generate --provider-name firezone --rendered-provider-name terraform-provider-firezone
 
 import (
 	"context"

@@ -162,7 +162,7 @@ func testAccPoolMemberResourceConfig(clientID string) string {
 	return `
 resource "firezone_resource" "pool" {
   name = "acc-test-pool"
-  type = "static_device_pool"
+  type = "device_pool"
 }
 
 resource "firezone_pool_member" "test" {
@@ -176,7 +176,7 @@ func testAccPoolMemberResourceAdditiveConfig(clientID, otherClientID string) str
 	return `
 resource "firezone_resource" "pool" {
   name = "acc-test-pool-additive"
-  type = "static_device_pool"
+  type = "device_pool"
 }
 
 resource "firezone_pool_member" "one" {

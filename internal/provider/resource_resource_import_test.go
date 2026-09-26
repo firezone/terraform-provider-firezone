@@ -11,33 +11,21 @@ import (
 	"github.com/hashicorp/terraform-plugin-testing/plancheck"
 )
 
-// TestAccResourceResource_ImportBlockAdoptsDevicePool checks that a
-// config-driven `import` block adopts an existing static_device_pool
-// Resource cleanly, despite ModifyPlan rejecting creation of that type.
-//
-// ModifyPlan returns early when prior state is non-null, and an import
-// block populates prior state before the plan is computed, so the guard
-// never fires on adoption. That is what makes the pool type importable
-// at all - the auto-discovery generator emits device pools as resource
-// blocks on the strength of it, so a regression here would silently
-// break generated config.
-//
-// Unlike the other acceptance tests in this package, this one runs
-// against an httptest fake rather than a live dev server: it needs a
-// pool that already exists, and the API refuses to create one. It needs
-// TF_ACC=1 and a terraform binary, but no FIREZONE_ENDPOINT.
+// TestAccResourceResource_ImportBlockAdoptsDevicePool exercises config-driven
+// adoption and a stable subsequent plan against the current device-pool API.
 func TestAccResourceResource_ImportBlockAdoptsDevicePool(t *testing.T) {
 	const poolID = "11111111-2222-3333-4444-555555555555"
 
 	pool := map[string]any{
-		"id":                  poolID,
-		"name":                "office-devices",
-		"type":                "static_device_pool",
-		"address":             nil,
-		"address_description": nil,
-		"ip_stack":            nil,
-		"site_id":             nil,
-		"filters":             []any{},
+		"device_membership_criteria": json.RawMessage(emptyListedCriteria),
+		"id":                         poolID,
+		"name":                       "office-devices",
+		"type":                       "device_pool",
+		"address":                    nil,
+		"address_description":        nil,
+		"ip_stack":                   nil,
+		"site_id":                    nil,
+		"filters":                    []any{},
 	}
 
 	var deleted bool
@@ -74,7 +62,7 @@ import {
 
 resource "firezone_resource" "pool" {
   name = "office-devices"
-  type = "static_device_pool"
+  type = "device_pool"
 }
 `, srv.URL, poolID)
 
@@ -90,7 +78,7 @@ resource "firezone_resource" "pool" {
 				},
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("firezone_resource.pool", "id", poolID),
-					resource.TestCheckResourceAttr("firezone_resource.pool", "type", "static_device_pool"),
+					resource.TestCheckResourceAttr("firezone_resource.pool", "type", "device_pool"),
 					resource.TestCheckNoResourceAttr("firezone_resource.pool", "site_id"),
 					resource.TestCheckNoResourceAttr("firezone_resource.pool", "address"),
 				),

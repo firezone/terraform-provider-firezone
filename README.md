@@ -2,7 +2,7 @@
 
 A Terraform provider for [Firezone](https://www.firezone.dev), built on
 `terraform-plugin-framework` and the
-[`firezone-go`](https://github.com/firezone/firezone-go) SDK
+[`firezone-sdk-go`](https://github.com/firezone/firezone-sdk-go) SDK
 
 Manages Sites, Gateways, Resources, Policies, Groups, Group Memberships,
 and Actors as resources. Looks up Sites, Groups, Actors, and IdP-synced
@@ -230,3 +230,31 @@ Acceptance tests need a running `firezone/firezone` dev server (Postgres
 + `mix phx.server`) and a token minted via that repo's
 `elixir/script/seed_api_client_token.exs`; see "Local development"
 above.
+
+
+## Device pools
+
+Use `firezone_resource` with `type = "device_pool"`. Pools have no Site or
+address. `device_membership_criteria` supports `listed`, `own_devices`,
+`all_devices`, and `actor_group` modes; see the [resource examples](examples/resources/firezone_resource/resource.tf).
+
+Choose one membership owner per pool:
+
+- Configure `device_membership_criteria` to manage the complete rule and member
+  set. Use `device_ids = []` with `mode = "listed"` to remove all members.
+- Omit it to create an empty listed pool and manage individual members through
+  [`firezone_pool_member`](examples/resources/firezone_pool_member/resource.tf).
+  Refresh reports current criteria, but parent updates leave them unchanged.
+  Removing configured criteria relinquishes ownership; it does not clear members.
+
+Dynamic pools do not support `firezone_pool_member`. Changing a dynamic rule
+revokes active connections through the pool; changing a listed set only revokes
+connections to removed members.
+
+When upgrading existing pools, change `type = "static_device_pool"` to
+`type = "device_pool"` in configuration. Refresh reads the server-migrated type
+under the existing ID; no replacement or state editing is required. Leave
+criteria omitted if you already use `firezone_pool_member`. Existing pools can
+also be imported by Resource UUID.
+
+The [REST API coverage audit](REST_API_COVERAGE.md) tracks remaining provider gaps.
