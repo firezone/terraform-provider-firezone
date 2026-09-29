@@ -1,16 +1,9 @@
-# Device pools cannot currently be created through the API - `terraform
-# apply` rejects it at plan time. Create the pool in the Firezone admin
-# portal, then adopt it here with `terraform import`. Once imported it is
-# managed normally: renamed, destroyed, and given members as below.
-#
-# A pool is the one Resource type not attached to a Site, so it omits
-# site_id entirely.
-#
-#   terraform import firezone_resource.field_laptops <resource_id>
-#
+# Omit device_membership_criteria to create an empty listed pool and let
+# firezone_pool_member manage its members. Parent updates leave them alone.
+# Device pools have no site_id or address.
 resource "firezone_resource" "field_laptops" {
   name = "field-laptops"
-  type = "static_device_pool"
+  type = "device_pool"
 }
 
 # Pool members are Clients, one firezone_pool_member per Client. Like

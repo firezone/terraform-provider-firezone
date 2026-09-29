@@ -3,29 +3,22 @@
 page_title: "firezone_pool_member Resource - terraform-provider-firezone"
 subcategory: ""
 description: |-
-  Adds a single Client to a static_device_pool Resource. Multiple firezone_pool_member resources for the same pool compose additively - unlike replacing the pool's entire membership, adding or removing one doesn't disturb any other. To put many Clients in one pool, for_each over their IDs to generate one firezone_pool_member per Client rather than writing a block per Client by hand.
+  Adds a single Client to a device_pool Resource with listed-device criteria. Omit device_membership_criteria on the parent firezone_resource when using this resource. Dynamic pools do not support explicit members. Multiple firezone_pool_member resources for the same pool compose additively - unlike replacing the pool's entire membership, adding or removing one doesn't disturb any other. To put many Clients in one pool, for_each over their IDs to generate one firezone_pool_member per Client rather than writing a block per Client by hand.
 ---
 
 # firezone_pool_member (Resource)
 
-Adds a single Client to a static_device_pool Resource. Multiple firezone_pool_member resources for the same pool compose additively - unlike replacing the pool's entire membership, adding or removing one doesn't disturb any other. To put many Clients in one pool, for_each over their IDs to generate one firezone_pool_member per Client rather than writing a block per Client by hand.
+Adds a single Client to a device_pool Resource with listed-device criteria. Omit device_membership_criteria on the parent firezone_resource when using this resource. Dynamic pools do not support explicit members. Multiple firezone_pool_member resources for the same pool compose additively - unlike replacing the pool's entire membership, adding or removing one doesn't disturb any other. To put many Clients in one pool, for_each over their IDs to generate one firezone_pool_member per Client rather than writing a block per Client by hand.
 
 ## Example Usage
 
 ```terraform
-# Device pools cannot currently be created through the API - `terraform
-# apply` rejects it at plan time. Create the pool in the Firezone admin
-# portal, then adopt it here with `terraform import`. Once imported it is
-# managed normally: renamed, destroyed, and given members as below.
-#
-# A pool is the one Resource type not attached to a Site, so it omits
-# site_id entirely.
-#
-#   terraform import firezone_resource.field_laptops <resource_id>
-#
+# Omit device_membership_criteria to create an empty listed pool and let
+# firezone_pool_member manage its members. Parent updates leave them alone.
+# Device pools have no site_id or address.
 resource "firezone_resource" "field_laptops" {
   name = "field-laptops"
-  type = "static_device_pool"
+  type = "device_pool"
 }
 
 # Pool members are Clients, one firezone_pool_member per Client. Like
@@ -67,7 +60,7 @@ resource "firezone_pool_member" "field_laptops" {
 ### Required
 
 - `device_id` (String) ID of the Client to add to the pool. Must be a Client, not a Gateway. Clients register themselves on first connect, so Terraform can reference them but cannot create them.
-- `resource_id` (String) ID of the static_device_pool Resource. Any other Resource type is rejected by the API - only device pools have members.
+- `resource_id` (String) ID of the device_pool Resource with listed-device criteria. Other Resource types and dynamic criteria are rejected by the API - only device pools have members.
 
 ### Read-Only
 

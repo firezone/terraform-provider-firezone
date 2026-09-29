@@ -23,18 +23,8 @@ var (
 	_ resource.ResourceWithModifyPlan     = &resourceResource{}
 )
 
-// resourceTypeStaticDevicePool is the one Resource type that is not
-// attached to a Site. The API nulls site_id for it server-side, so the
-// provider has to treat site_id as forbidden rather than required here
-// - see ValidateConfig.
-//
-// It is currently readable but not creatable: the API refuses any
-// request that changes a Resource's type to it. The type stays in the
-// schema's enum so existing pools - created in the admin portal - can
-// still be imported, renamed, and destroyed here; ModifyPlan rejects
-// only the create. To re-enable creation once the API allows it, delete
-// ModifyPlan and its test.
-const resourceTypeStaticDevicePool = "static_device_pool"
+// Device pools have membership criteria instead of an address or Site.
+const resourceTypeDevicePool = "device_pool"
 
 // resourceTypeDNS is the only Resource type ip_stack applies to. The
 // API defaults it to "dual" for dns Resources and enforces NULL for
@@ -60,14 +50,15 @@ type resourceFilterModel struct {
 
 // resourceResourceModel mirrors the firezone_resource resource schema.
 type resourceResourceModel struct {
-	ID                 types.String          `tfsdk:"id"`
-	SiteID             types.String          `tfsdk:"site_id"`
-	Name               types.String          `tfsdk:"name"`
-	Type               types.String          `tfsdk:"type"`
-	Address            types.String          `tfsdk:"address"`
-	AddressDescription types.String          `tfsdk:"address_description"`
-	IPStack            types.String          `tfsdk:"ip_stack"`
-	Filters            []resourceFilterModel `tfsdk:"filters"`
+	DeviceMembershipCriteria types.Object          `tfsdk:"device_membership_criteria"`
+	ID                       types.String          `tfsdk:"id"`
+	SiteID                   types.String          `tfsdk:"site_id"`
+	Name                     types.String          `tfsdk:"name"`
+	Type                     types.String          `tfsdk:"type"`
+	Address                  types.String          `tfsdk:"address"`
+	AddressDescription       types.String          `tfsdk:"address_description"`
+	IPStack                  types.String          `tfsdk:"ip_stack"`
+	Filters                  []resourceFilterModel `tfsdk:"filters"`
 }
 
 func (r *resourceResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -76,8 +67,9 @@ func (r *resourceResource) Metadata(_ context.Context, req resource.MetadataRequ
 
 func (r *resourceResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "A Resource - a network object (CIDR, IP, DNS name, or static device pool) that Policies grant access to.",
+		Description: "A Resource - a network object (CIDR, IP, DNS name, or device pool) that Policies grant access to.",
 		Attributes: map[string]schema.Attribute{
+			"device_membership_criteria": deviceMembershipCriteriaSchema(),
 			"id": schema.StringAttribute{
 				Computed:    true,
 				Description: "Resource ID.",
@@ -88,20 +80,17 @@ func (r *resourceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 			"site_id": schema.StringAttribute{
 				Optional: true,
 				Description: "ID of the Site this Resource belongs to. Required for every type " +
-					"except static_device_pool, which is not attached to a Site and must omit it.",
+					"except device_pool, which is not attached to a Site and must omit it.",
 			},
 			"name": schema.StringAttribute{
 				Required:    true,
 				Description: "Resource name.",
 			},
 			"type": schema.StringAttribute{
-				Required: true,
-				Description: "Resource type. One of cidr, ip, dns, static_device_pool. " +
-					"\"static_device_pool\" cannot be created here - the API refuses it - but " +
-					"an existing pool created in the admin portal can be imported and managed. " +
-					"\"internet\" also exists but is API-read-only and cannot be set at all.",
+				Required:    true,
+				Description: "Resource type. One of cidr, ip, dns, device_pool. Internet Resources are API-read-only.",
 				Validators: []validator.String{
-					stringvalidator.OneOf("cidr", "ip", "dns", "static_device_pool"),
+					stringvalidator.OneOf("cidr", "ip", "dns", "device_pool"),
 				},
 			},
 			"address": schema.StringAttribute{
@@ -167,7 +156,7 @@ func (r *resourceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 // conditionally on type, neither of which a Required/Optional flag can
 // express:
 //
-//   - site_id is required for every type except static_device_pool,
+//   - site_id is required for every type except device_pool,
 //     which is not attached to a Site at all.
 //   - ip_stack applies only to dns Resources, and must be omitted for
 //     every other type.
@@ -175,7 +164,7 @@ func (r *resourceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 // Both matter because the failure modes differ. Omitting site_id on a
 // normal Resource, or setting ip_stack on a non-dns one, is a 422 at
 // apply time - after other resources in the same apply have already
-// been created. Setting site_id on a static_device_pool is worse still:
+// been created. Setting site_id on a device_pool is worse still:
 // the API silently discards it, so the apply succeeds while state
 // records a Site the server never stored.
 func (r *resourceResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
@@ -194,7 +183,7 @@ func (r *resourceResource) ValidateConfig(ctx context.Context, req resource.Vali
 	resourceType := config.Type.ValueString()
 
 	if !config.SiteID.IsUnknown() {
-		isPool := resourceType == resourceTypeStaticDevicePool
+		isPool := resourceType == resourceTypeDevicePool
 		hasSiteID := !config.SiteID.IsNull()
 
 		switch {
@@ -202,8 +191,8 @@ func (r *resourceResource) ValidateConfig(ctx context.Context, req resource.Vali
 			resp.Diagnostics.AddAttributeError(
 				siteIDPath,
 				"Invalid Attribute Combination",
-				"site_id must be omitted when type is \""+resourceTypeStaticDevicePool+"\". "+
-					"A static device pool is not attached to a Site, and the API discards any "+
+				"site_id must be omitted when type is \""+resourceTypeDevicePool+"\". "+
+					"A device pool is not attached to a Site, and the API discards any "+
 					"site_id sent with one - leaving Terraform state holding a Site the server "+
 					"does not have.",
 			)
@@ -212,10 +201,15 @@ func (r *resourceResource) ValidateConfig(ctx context.Context, req resource.Vali
 				siteIDPath,
 				"Missing Required Attribute",
 				"site_id is required when type is \""+resourceType+"\". "+
-					"Only \""+resourceTypeStaticDevicePool+"\" Resources omit it.",
+					"Only \""+resourceTypeDevicePool+"\" Resources omit it.",
 			)
 		}
 	}
+
+	if resourceType == resourceTypeDevicePool && !config.Address.IsNull() && !config.Address.IsUnknown() {
+		resp.Diagnostics.AddAttributeError(path.Root("address"), "Invalid Attribute Combination", "address must be omitted for a device_pool; the API discards it.")
+	}
+	validateDeviceMembershipCriteria(ctx, config, &resp.Diagnostics)
 
 	// ip_stack has no "required" direction: the API defaults it to
 	// "dual" for dns Resources, so omitting it is always valid.
@@ -230,38 +224,34 @@ func (r *resourceResource) ValidateConfig(ctx context.Context, req resource.Vali
 	}
 }
 
-// ModifyPlan rejects creating a static_device_pool Resource, which the
-// API refuses with a 422.
-//
-// This lives in ModifyPlan rather than ValidateConfig because only the
-// former can tell a create from an update: a null prior state means
-// create. Removing the type from the schema's enum would block creation
-// too, but would also make existing pools unmanageable - a config block
-// is needed to import one, and the enum would reject it.
+// ModifyPlan clears criteria when converting away from a pool. For a conversion
+// into a pool with unmanaged membership, Create/Update initializes an empty list.
 func (r *resourceResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
-	// Only a create has no prior state. Destroy has no plan.
-	if !req.State.Raw.IsNull() || req.Plan.Raw.IsNull() {
+	if req.Plan.Raw.IsNull() {
 		return
 	}
-
-	var plan resourceResourceModel
+	var plan, config resourceResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
-	if resp.Diagnostics.HasError() {
+	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
+	if resp.Diagnostics.HasError() || plan.Type.IsUnknown() {
 		return
 	}
-
-	if plan.Type.IsUnknown() || plan.Type.ValueString() != resourceTypeStaticDevicePool {
+	if plan.Type.ValueString() != resourceTypeDNS && config.IPStack.IsNull() {
+		resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, ipStackPath, types.StringNull())...)
+	}
+	if !config.DeviceMembershipCriteria.IsNull() {
 		return
 	}
-
-	resp.Diagnostics.AddAttributeError(
-		path.Root("type"),
-		"Device Pools Cannot Be Created",
-		"The API refuses to create a Resource of type \""+resourceTypeStaticDevicePool+"\". "+
-			"Create the device pool in the Firezone admin portal, then adopt it with "+
-			"terraform import - an existing pool can be managed here normally, including "+
-			"its firezone_pool_member entries.",
-	)
+	p := path.Root("device_membership_criteria")
+	if plan.Type.ValueString() != resourceTypeDevicePool {
+		resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, p, types.ObjectNull(criteriaAttributeTypes))...)
+	} else if !req.State.Raw.IsNull() {
+		var state resourceResourceModel
+		resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+		if state.Type.ValueString() != resourceTypeDevicePool {
+			resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, p, types.ObjectUnknown(criteriaAttributeTypes))...)
+		}
+	}
 }
 
 func (r *resourceResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
@@ -285,14 +275,21 @@ func (r *resourceResource) Create(ctx context.Context, req resource.CreateReques
 		return
 	}
 
+	criteria, criteriaDiags := criteriaForCreate(ctx, plan)
+	resp.Diagnostics.Append(criteriaDiags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
 	created, err := r.client.Resources.Create(ctx, &firezone.CreateResourceRequest{
-		Name:               plan.Name.ValueString(),
-		Type:               firezone.ResourceType(plan.Type.ValueString()),
-		Address:            plan.Address.ValueString(),
-		AddressDescription: plan.AddressDescription.ValueString(),
-		IPStack:            firezone.IPStack(plan.IPStack.ValueString()),
-		SiteID:             plan.SiteID.ValueString(),
-		Filters:            filters,
+		DeviceMembershipCriteria: criteria,
+		Name:                     plan.Name.ValueString(),
+		Type:                     firezone.ResourceType(plan.Type.ValueString()),
+		Address:                  plan.Address.ValueString(),
+		AddressDescription:       plan.AddressDescription.ValueString(),
+		IPStack:                  firezone.IPStack(plan.IPStack.ValueString()),
+		SiteID:                   plan.SiteID.ValueString(),
+		Filters:                  filters,
 	})
 	if err != nil {
 		resp.Diagnostics.AddError("Error Creating Resource", err.Error())
@@ -345,14 +342,35 @@ func (r *resourceResource) Update(ctx context.Context, req resource.UpdateReques
 		return
 	}
 
+	// Unconfigured criteria are owned by pool-member resources or the portal.
+	// Never echo their last read value back during a rename or filter update.
+	var config resourceResourceModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
+	var criteria []byte
+	if !config.DeviceMembershipCriteria.IsNull() {
+		var criteriaDiags fwDiagnostics
+		criteria, criteriaDiags = criteriaToAPI(ctx, plan.DeviceMembershipCriteria)
+		resp.Diagnostics.Append(criteriaDiags...)
+	} else if plan.Type.ValueString() == resourceTypeDevicePool {
+		var state resourceResourceModel
+		resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+		if state.Type.ValueString() != resourceTypeDevicePool {
+			criteria = emptyListedCriteria
+		}
+	}
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
 	updated, err := r.client.Resources.Update(ctx, plan.ID.ValueString(), &firezone.UpdateResourceRequest{
-		Name:               plan.Name.ValueString(),
-		Type:               firezone.ResourceType(plan.Type.ValueString()),
-		Address:            nullableString(plan.Address),
-		AddressDescription: nullableString(plan.AddressDescription),
-		IPStack:            ipStackForUpdate(plan.IPStack),
-		SiteID:             nullableString(plan.SiteID),
-		Filters:            &filters,
+		DeviceMembershipCriteria: criteria,
+		Name:                     plan.Name.ValueString(),
+		Type:                     firezone.ResourceType(plan.Type.ValueString()),
+		Address:                  nullableString(plan.Address),
+		AddressDescription:       nullableString(plan.AddressDescription),
+		IPStack:                  ipStackForUpdate(plan.IPStack),
+		SiteID:                   nullableString(plan.SiteID),
+		Filters:                  &filters,
 	})
 	if err != nil {
 		resp.Diagnostics.AddError("Error Updating Resource", err.Error())
@@ -386,11 +404,15 @@ func (r *resourceResource) ImportState(ctx context.Context, req resource.ImportS
 // resourceModelFromAPI populates model's read-back fields from an API
 // *firezone.Resource.
 func resourceModelFromAPI(ctx context.Context, res *firezone.Resource, model *resourceResourceModel) (diags fwDiagnostics) {
+	criteria, criteriaDiags := criteriaFromAPI(ctx, res.DeviceMembershipCriteria, model.DeviceMembershipCriteria)
+	diags.Append(criteriaDiags...)
+	model.DeviceMembershipCriteria = criteria
+
 	model.ID = types.StringValue(res.ID)
 	model.Name = types.StringValue(res.Name)
 	model.Type = types.StringValue(string(res.Type))
 	// The API nulls address for types that don't have one -
-	// static_device_pool and internet. An Optional attribute the config
+	// device_pool and internet. An Optional attribute the config
 	// left unset must read back as null, not "", or Terraform rejects
 	// the apply as an inconsistent result.
 	if res.Address == "" {
@@ -413,7 +435,7 @@ func resourceModelFromAPI(ctx context.Context, res *firezone.Resource, model *re
 		model.IPStack = types.StringValue(string(res.IPStack))
 	}
 	// The API omits site_id for Resources that have none - i.e.
-	// static_device_pool, which it detaches from any Site server-side.
+	// device_pool, which it detaches from any Site server-side.
 	// Map that to an explicit null instead of keeping whatever the
 	// caller planned, so state reflects the server rather than the
 	// config. ValidateConfig already rejects the combination that would

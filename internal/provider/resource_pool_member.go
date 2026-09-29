@@ -54,7 +54,7 @@ func (r *poolMemberResource) Metadata(_ context.Context, req resource.MetadataRe
 
 func (r *poolMemberResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Adds a single Client to a static_device_pool Resource. Multiple " +
+		Description: "Adds a single Client to a device_pool Resource with listed-device criteria. Omit device_membership_criteria on the parent firezone_resource when using this resource. Dynamic pools do not support explicit members. Multiple " +
 			"firezone_pool_member resources for the same pool compose additively - unlike " +
 			"replacing the pool's entire membership, adding or removing one doesn't disturb " +
 			"any other. To put many Clients in one pool, for_each over their IDs to generate " +
@@ -70,7 +70,7 @@ func (r *poolMemberResource) Schema(_ context.Context, _ resource.SchemaRequest,
 			},
 			"resource_id": schema.StringAttribute{
 				Required: true,
-				Description: "ID of the static_device_pool Resource. Any other Resource type is " +
+				Description: "ID of the device_pool Resource with listed-device criteria. Other Resource types and dynamic criteria are " +
 					"rejected by the API - only device pools have members.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),

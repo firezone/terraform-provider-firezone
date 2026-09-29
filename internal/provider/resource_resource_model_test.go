@@ -139,7 +139,7 @@ func TestFiltersToModel_MixedFilters(t *testing.T) {
 func TestResourceModelFromAPI_NullableStrings(t *testing.T) {
 	ctx := context.Background()
 
-	// A static_device_pool: no address and no site, both nulled by the
+	// A device_pool: no address and no site, both nulled by the
 	// API regardless of what was sent.
 	pool := &firezone.Resource{
 		ID:   "res-1",
