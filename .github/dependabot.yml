@@ -31,8 +31,9 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    # The github-actions ecosystem doesn't support semver cooldowns, and these
-    # update very frequently, so cooldowns are left off.
+    # The github-actions ecosystem only supports default-days, not the semver-*-days options.
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 100
     groups:
       security-all:
