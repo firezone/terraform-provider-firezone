@@ -1,0 +1,42 @@
+version: 2
+
+updates:
+  - package-ecosystem: gomod
+    target-branch: main
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      semver-patch-days: 2
+      semver-minor-days: 7
+      semver-major-days: 14
+      default-days: 7
+    open-pull-requests-limit: 100
+    groups:
+      security-all:
+        applies-to: security-updates
+        patterns:
+          - "*"
+      golang-x:
+        patterns:
+          - "golang.org/x/*"
+      go-git:
+        patterns:
+          - "github.com/go-git/*"
+      otel:
+        patterns:
+          - "go.opentelemetry.io/*"
+  - package-ecosystem: github-actions
+    target-branch: main
+    directory: /
+    schedule:
+      interval: weekly
+    # The github-actions ecosystem only supports default-days, not the semver-*-days options.
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 100
+    groups:
+      security-all:
+        applies-to: security-updates
+        patterns:
+          - "*"
