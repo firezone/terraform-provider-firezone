@@ -2,6 +2,7 @@
 // Firezone (https://www.firezone.dev).
 package main
 
+//go:generate go run ./internal/genposture
 //go:generate go tool tfplugindocs generate
 
 import (

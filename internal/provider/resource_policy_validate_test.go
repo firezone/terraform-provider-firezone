@@ -213,6 +213,7 @@ func TestPolicyResourceValidateConfig(t *testing.T) {
 				"flow_log_uploads_enabled": tftypes.NewValue(tftypes.Bool, nil),
 				"enabled":                  tftypes.NewValue(tftypes.Bool, nil),
 				"condition":                conditions,
+				"posture":                  tftypes.NewValue(objType.AttributeTypes["posture"], nil),
 			})
 
 			resp := &fwresource.ValidateConfigResponse{}
@@ -351,6 +352,7 @@ func TestPolicyResourceValidateConfig_BooleanValues(t *testing.T) {
 					"description":              tftypes.NewValue(tftypes.String, nil),
 					"flow_log_uploads_enabled": tftypes.NewValue(tftypes.Bool, nil),
 					"enabled":                  tftypes.NewValue(tftypes.Bool, nil),
+					"posture":                  tftypes.NewValue(objType.AttributeTypes["posture"], nil),
 					"condition": tftypes.NewValue(conditionListType, []tftypes.Value{
 						tftypes.NewValue(conditionType, map[string]tftypes.Value{
 							"property": str(property),
@@ -579,6 +581,7 @@ func TestPolicyResourceValidateConfig_DayTimeRangeValues(t *testing.T) {
 				"description":              tftypes.NewValue(tftypes.String, nil),
 				"flow_log_uploads_enabled": tftypes.NewValue(tftypes.Bool, nil),
 				"enabled":                  tftypes.NewValue(tftypes.Bool, nil),
+				"posture":                  tftypes.NewValue(objType.AttributeTypes["posture"], nil),
 				"condition": tftypes.NewValue(conditionListType, []tftypes.Value{
 					tftypes.NewValue(conditionType, map[string]tftypes.Value{
 						"property": tftypes.NewValue(tftypes.String, propertyCurrentUTCDatetime),
