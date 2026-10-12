@@ -89,13 +89,13 @@ func serializedPatch(ctx context.Context, parentID string, patch func() error) e
 	}
 }
 
-// jitter returns a random duration in [0, max). It reads from crypto/rand
+// jitter returns a random duration in [0, limit). It reads from crypto/rand
 // so static analysis has nothing to flag; the randomness is not
-// security-sensitive here. crypto/rand.Int only errors for max <= 0, which
+// security-sensitive here. crypto/rand.Int only errors for limit <= 0, which
 // the fixed backoff schedule rules out, and in that case no jitter is
 // added.
-func jitter(max time.Duration) time.Duration {
-	n, err := rand.Int(rand.Reader, big.NewInt(int64(max)))
+func jitter(limit time.Duration) time.Duration {
+	n, err := rand.Int(rand.Reader, big.NewInt(int64(limit)))
 	if err != nil {
 		return 0
 	}
