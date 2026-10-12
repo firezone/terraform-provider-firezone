@@ -2,7 +2,8 @@ package provider
 
 import (
 	"context"
-	"math/rand"
+	"crypto/rand"
+	"math/big"
 	"sync"
 	"time"
 
@@ -78,7 +79,7 @@ func serializedPatch(ctx context.Context, parentID string, patch func() error) e
 		// 50ms, 100ms, 200ms, 400ms, each with up to 50% jitter so
 		// several racing processes don't retry in lockstep.
 		backoff := time.Duration(50<<attempt) * time.Millisecond
-		backoff += time.Duration(rand.Int63n(int64(backoff / 2)))
+		backoff += jitter(backoff / 2)
 
 		select {
 		case <-ctx.Done():
@@ -86,4 +87,17 @@ func serializedPatch(ctx context.Context, parentID string, patch func() error) e
 		case <-time.After(backoff):
 		}
 	}
+}
+
+// jitter returns a random duration in [0, max). It reads from crypto/rand
+// so static analysis has nothing to flag; the randomness is not
+// security-sensitive here. crypto/rand.Int only errors for max <= 0, which
+// the fixed backoff schedule rules out, and in that case no jitter is
+// added.
+func jitter(max time.Duration) time.Duration {
+	n, err := rand.Int(rand.Reader, big.NewInt(int64(max)))
+	if err != nil {
+		return 0
+	}
+	return time.Duration(n.Int64())
 }
