@@ -231,6 +231,10 @@ Acceptance tests need a running `firezone/firezone` dev server (Postgres
 `elixir/script/seed_api_client_token.exs`; see "Local development"
 above.
 
+## Releasing
+
+See [RELEASING.md](RELEASING.md) for how to cut a release.
+
 ## Device pools
 
 Use `firezone_resource` with `type = "device_pool"`. Pools have no Site or
