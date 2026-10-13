@@ -12,8 +12,36 @@ permissions:
   contents: read
 
 jobs:
+  # Neither the tag ruleset nor the environment's deployment policy can
+  # express "this tag must point at a commit on main" - a ruleset gates
+  # who may create a tag, and the deployment policy only sees
+  # refs/tags/vX.Y.Z, never the branch. So the check lives here.
+  #
+  # Kept as its own job, ahead of the one carrying `environment: release`,
+  # so a tag cut from a side branch fails before a reviewer is asked to
+  # approve exposing the signing key.
+  verify-tag:
+    name: Verify the tag is on main
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # merge-base needs both the tagged commit's history and main's.
+          fetch-depth: 0
+
+      - name: Refuse to release a commit that is not on main
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/main; then
+            echo "::error::${GITHUB_REF_NAME} points at ${GITHUB_SHA}, which is not an ancestor of main. Release tags must be cut from main."
+            exit 1
+          fi
+          echo "${GITHUB_REF_NAME} -> ${GITHUB_SHA} is on main."
+
   goreleaser:
     name: Build, sign and publish release artifacts
+    needs: verify-tag
     runs-on: ubuntu-latest
     # Scopes GPG_PRIVATE_KEY to a reviewed environment rather than the
     # repo secret store. Configure required reviewers on the "release"
