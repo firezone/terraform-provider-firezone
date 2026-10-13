@@ -15,8 +15,9 @@ func TestAccActorDataSource(t *testing.T) {
 			{
 				Config: `
 resource "firezone_actor" "test" {
-  name = "acc-test-ds-actor"
-  type = "service_account"
+  name  = "acc-test-ds-actor"
+  type  = "account_user"
+  email = "acc-test-ds-actor@example.com"
 }
 
 data "firezone_actor" "by_id" {
@@ -43,7 +44,7 @@ data "firezone_actor" "by_name_and_email" {
 					// it resolves on its own - the point of the lookup.
 					resource.TestCheckResourceAttrPair("data.firezone_actor.by_email", "id", "firezone_actor.test", "id"),
 					resource.TestCheckResourceAttrPair("data.firezone_actor.by_name_and_email", "id", "firezone_actor.test", "id"),
-					resource.TestCheckResourceAttr("data.firezone_actor.by_id", "type", "service_account"),
+					resource.TestCheckResourceAttr("data.firezone_actor.by_id", "type", "account_user"),
 				),
 			},
 		},
