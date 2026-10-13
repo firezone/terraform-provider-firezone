@@ -178,7 +178,7 @@ func TestAccClientDataSource_ExactlyOneOf(t *testing.T) {
 		Steps: []resource.TestStep{
 			{
 				Config:      `data "firezone_client" "test" {}`,
-				ExpectError: regexp.MustCompile(`Invalid Attribute Combination`),
+				ExpectError: regexp.MustCompile(`Missing Attribute Configuration`),
 			},
 			{
 				Config: `
