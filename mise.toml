@@ -43,9 +43,9 @@ run = "go generate ./..."
 description = "Fail if generated docs are out of date (CI check)"
 run = """
 go generate ./...
-if [ -n "$(git status --porcelain docs/ examples/)" ]; then
-  echo "docs/ is out of date - run 'mise run tfdocs' and commit the result" >&2
-  git status --porcelain docs/ examples/ >&2
+if [ -n "$(git status --porcelain docs/ examples/ internal/)" ]; then
+  echo "generated files are out of date - run 'mise run tfdocs' and commit the result" >&2
+  git status --porcelain docs/ examples/ internal/ >&2
   exit 1
 fi
 """

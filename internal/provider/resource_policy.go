@@ -80,6 +80,7 @@ type policyResourceModel struct {
 	FlowLogUploadsEnabled types.Bool             `tfsdk:"flow_log_uploads_enabled"`
 	Enabled               types.Bool             `tfsdk:"enabled"`
 	Condition             []policyConditionModel `tfsdk:"condition"`
+	Posture               types.List             `tfsdk:"posture"`
 }
 
 func (r *policyResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -186,6 +187,7 @@ func (r *policyResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 					},
 				},
 			},
+			"posture": postureBlock(),
 		},
 	}
 }
@@ -203,6 +205,9 @@ func (r *policyResource) ValidateConfig(ctx context.Context, req resource.Valida
 	if resp.Diagnostics.HasError() {
 		return
 	}
+
+	_, postureDiags := postureFromList(config.Posture)
+	resp.Diagnostics.Append(postureDiags...)
 
 	// Records the index of the first condition seen for each property,
 	// so a later duplicate can point back at it.
@@ -485,6 +490,12 @@ func (r *policyResource) Create(ctx context.Context, req resource.CreateRequest,
 		return
 	}
 
+	postures, postureDiags := postureFromList(plan.Posture)
+	resp.Diagnostics.Append(postureDiags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
 	flowLogUploadsEnabled := plan.FlowLogUploadsEnabled.ValueBool()
 	// Sent on create rather than disabling afterwards, so a Policy
 	// planned as disabled never grants access, even briefly.
@@ -496,6 +507,7 @@ func (r *policyResource) Create(ctx context.Context, req resource.CreateRequest,
 		FlowLogUploadsEnabled: &flowLogUploadsEnabled,
 		IsDisabled:            &isDisabled,
 		Conditions:            conditions,
+		Postures:              postures,
 	})
 	if err != nil {
 		resp.Diagnostics.AddError("Error Creating Policy", err.Error())
@@ -548,6 +560,27 @@ func (r *policyResource) Update(ctx context.Context, req resource.UpdateRequest,
 		return
 	}
 
+	// Changing postures revokes the Policy's active authorizations, so
+	// send them only when they changed, never as a no-op on every update.
+	var state policyResourceModel
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	var postures *firezone.Null[firezone.PostureNode]
+	if !plan.Posture.Equal(state.Posture) {
+		node, postureDiags := postureFromList(plan.Posture)
+		resp.Diagnostics.Append(postureDiags...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		if node == nil {
+			postures = firezone.Clear[firezone.PostureNode]()
+		} else {
+			postures = firezone.Set(*node)
+		}
+	}
+
 	flowLogUploadsEnabled := plan.FlowLogUploadsEnabled.ValueBool()
 	isDisabled := !plan.Enabled.ValueBool()
 	updated, err := r.client.Policies.Update(ctx, plan.ID.ValueString(), &firezone.UpdatePolicyRequest{
@@ -557,6 +590,7 @@ func (r *policyResource) Update(ctx context.Context, req resource.UpdateRequest,
 		FlowLogUploadsEnabled: &flowLogUploadsEnabled,
 		IsDisabled:            &isDisabled,
 		Conditions:            &conditions,
+		Postures:              postures,
 	})
 	if err != nil {
 		resp.Diagnostics.AddError("Error Updating Policy", err.Error())
@@ -605,6 +639,10 @@ func policyModelFromAPI(ctx context.Context, pol *firezone.Policy, model *policy
 
 	conditions, diags := conditionsToModel(ctx, pol.Conditions)
 	model.Condition = conditions
+
+	posture, postureDiags := postureToList(pol.Postures)
+	model.Posture = posture
+	diags.Append(postureDiags...)
 	return diags
 }
 

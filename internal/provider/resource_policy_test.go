@@ -184,3 +184,95 @@ func TestPolicyModelFromAPI_Enabled(t *testing.T) {
 		})
 	}
 }
+
+// TestAccPolicyResource_Posture covers device posture blocks: create with a
+// nested expression, import, change a check, then remove the posture.
+// Needs an account with the device_posture entitlement.
+func TestAccPolicyResource_Posture(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccPolicyPostureConfig("compliant"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("firezone_policy.test", "posture.0.operator", "and"),
+					resource.TestCheckResourceAttr("firezone_policy.test", "posture.0.negate", "false"),
+					resource.TestCheckResourceAttr("firezone_policy.test", "posture.0.check.0.field", "intune.enrolled"),
+					resource.TestCheckResourceAttr("firezone_policy.test", "posture.0.check.0.value", "true"),
+					resource.TestCheckResourceAttr("firezone_policy.test", "posture.0.group.0.operator", "or"),
+					resource.TestCheckResourceAttr("firezone_policy.test", "posture.0.group.0.check.0.values.0", "compliant"),
+					resource.TestCheckResourceAttr("firezone_policy.test", "posture.0.group.0.check.0.rows", "all"),
+				),
+			},
+			{
+				ResourceName:      "firezone_policy.test",
+				ImportState:       true,
+				ImportStateVerify: true,
+			},
+			{
+				Config: testAccPolicyPostureConfig("inGracePeriod"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("firezone_policy.test", "posture.0.group.0.check.0.values.0", "inGracePeriod"),
+				),
+			},
+			{
+				Config: testAccPolicyResourceConfig("no posture", true),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckNoResourceAttr("firezone_policy.test", "posture.0.operator"),
+				),
+			},
+		},
+	})
+}
+
+func testAccPolicyPostureConfig(complianceState string) string {
+	return `
+resource "firezone_site" "test" {
+  name = "acc-test-site"
+}
+
+resource "firezone_resource" "test" {
+  site_id = firezone_site.test.id
+  name    = "acc-test-resource"
+  type    = "dns"
+  address = "internal.example.com"
+}
+
+resource "firezone_group" "test" {
+  name = "acc-test-group"
+}
+
+resource "firezone_policy" "test" {
+  group_id    = firezone_group.test.id
+  resource_id = firezone_resource.test.id
+
+  posture {
+    operator = "and"
+
+    check {
+      field    = "intune.enrolled"
+      operator = "is"
+      value    = "true"
+    }
+
+    group {
+      operator = "or"
+
+      check {
+        field    = "intune.compliance_state"
+        operator = "is_in"
+        values   = ["` + complianceState + `"]
+        rows     = "all"
+      }
+
+      check {
+        field    = "firezone.last_seen_version"
+        operator = "gte"
+        value    = "@latest"
+      }
+    }
+  }
+}
+`
+}
