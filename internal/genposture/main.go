@@ -98,7 +98,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join("internal", "provider", "policy_posture_fields_gen.go"), formatted, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join("internal", "provider", "policy_posture_fields_gen.go"), formatted, 0o600); err != nil {
 		log.Fatal(err)
 	}
 }
