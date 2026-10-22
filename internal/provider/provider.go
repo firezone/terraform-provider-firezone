@@ -310,6 +310,7 @@ func (p *FirezoneProvider) DataSources(_ context.Context) []func() datasource.Da
 		NewGoogleAuthProviderDataSource,
 		NewEntraAuthProviderDataSource,
 		NewOktaAuthProviderDataSource,
+		NewGitHubAuthProviderDataSource,
 		NewEntraDirectoryDataSource,
 		NewGoogleDirectoryDataSource,
 		NewOktaDirectoryDataSource,
