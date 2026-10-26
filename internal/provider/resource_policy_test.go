@@ -185,6 +185,23 @@ func TestPolicyModelFromAPI_Enabled(t *testing.T) {
 	}
 }
 
+// TestPolicyModelFromAPI_RequireAttestation pins that require_attestation
+// is read back from the API, so a Policy whose certificate requirement
+// was changed outside Terraform shows a diff on the next plan.
+func TestPolicyModelFromAPI_RequireAttestation(t *testing.T) {
+	for _, want := range []bool{true, false} {
+		var model policyResourceModel
+		diags := policyModelFromAPI(context.Background(), &firezone.Policy{RequireAttestation: want}, &model)
+		if diags.HasError() {
+			t.Fatalf("policyModelFromAPI returned diagnostics: %v", diags)
+		}
+
+		if got := model.RequireAttestation.ValueBool(); got != want {
+			t.Errorf("RequireAttestation = %v, want %v", got, want)
+		}
+	}
+}
+
 // TestAccPolicyResource_Posture covers device posture blocks: create with a
 // nested expression, import, change a check, then remove the posture.
 // Needs an account with the device_posture entitlement.

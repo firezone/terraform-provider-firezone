@@ -41,7 +41,7 @@ type entraAuthProviderDataSource struct {
 type entraAuthProviderDataSourceModel struct {
 	ID         types.String `tfsdk:"id"`
 	Name       types.String `tfsdk:"name"`
-	Issuer     types.String `tfsdk:"issuer"`
+	TenantIDs  types.List   `tfsdk:"tenant_ids"`
 	IsDisabled types.Bool   `tfsdk:"is_disabled"`
 	IsDefault  types.Bool   `tfsdk:"is_default"`
 	EmailClaim types.String `tfsdk:"email_claim"`
@@ -69,9 +69,10 @@ func (d *entraAuthProviderDataSource) Schema(_ context.Context, _ datasource.Sch
 					"settings. Set this or id, not both. Fails if more than one provider shares " +
 					"this name.",
 			},
-			"issuer": schema.StringAttribute{
+			"tenant_ids": schema.ListAttribute{
+				ElementType: types.StringType,
 				Computed:    true,
-				Description: "The provider's issuer identifier.",
+				Description: "The verified Microsoft Entra tenant IDs allowed to sign in with this provider.",
 			},
 			"is_disabled": schema.BoolAttribute{
 				Computed: true,
@@ -147,7 +148,12 @@ func (d *entraAuthProviderDataSource) Read(ctx context.Context, req datasource.R
 
 	config.ID = types.StringValue(provider.ID)
 	config.Name = types.StringValue(provider.Name)
-	config.Issuer = types.StringValue(provider.Issuer)
+	tenantIDs, diags := stringListToModel(ctx, provider.TenantIDs)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	config.TenantIDs = tenantIDs
 	config.IsDisabled = types.BoolValue(provider.IsDisabled)
 	config.IsDefault = types.BoolValue(provider.IsDefault)
 	config.EmailClaim = types.StringValue(provider.EmailClaim)

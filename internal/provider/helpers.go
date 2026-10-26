@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -96,4 +97,15 @@ func nullableString(v types.String) *firezone.Null[string] {
 		return firezone.Clear[string]()
 	}
 	return firezone.Set(v.ValueString())
+}
+
+// stringListToModel maps a read-only API string array onto a Computed
+// list attribute. The API can omit the array or send null, and both map
+// to an empty list, so the attribute is always a list a config can
+// iterate over without a null check.
+func stringListToModel(ctx context.Context, values []string) (types.List, fwDiagnostics) {
+	if values == nil {
+		values = []string{}
+	}
+	return types.ListValueFrom(ctx, types.StringType, values)
 }

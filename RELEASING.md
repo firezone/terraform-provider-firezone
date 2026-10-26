@@ -22,6 +22,13 @@ Terraform Registry reads from that release.
    `v0.2.0`. Do not use `v0.2`. The Registry expects three parts, and the
    existing tags (`v0.1.0`, `v0.1.1`) follow that format.
 
+   While the provider is at 0.x, bump the minor version (for example
+   `v0.2.0` to `v0.3.0`) if `CHANGELOG.md` lists a breaking change. Bump
+   the patch version for fixes and additions only. Then rename the
+   `## [Unreleased]` heading in `CHANGELOG.md` to the new version and
+   date, add a new empty `## [Unreleased]` section, update the compare
+   links at the bottom, and merge that to `main` before you tag.
+
 3. **Tag and push.** Use an annotated tag on the commit you want to ship:
 
    ```bash
@@ -43,8 +50,9 @@ Terraform Registry reads from that release.
    - `terraform-provider-firezone_<version>_manifest.json`
 
 6. **Write the release notes.** `.goreleaser.yml` sets `changelog: disable`,
-   so the GitHub Release body is not generated from commits. Edit the notes by
-   hand.
+   so the GitHub Release body is not generated from commits. Copy the
+   version's section from `CHANGELOG.md` into the release notes. Keep the
+   upgrade steps for each breaking change.
 
 ## Notes
 

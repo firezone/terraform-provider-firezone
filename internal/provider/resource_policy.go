@@ -47,8 +47,13 @@ var validOperatorsForProperty = map[string][]string{
 	"auth_provider_id":          {"is_in", "is_not_in"},
 	propertyCurrentUTCDatetime:  {"is_in_day_of_week_time_ranges"},
 	"client_verified":           {"is"},
-	"device_attested":           {"is"},
 }
+
+// propertyDeviceAttested is the condition property the API replaced with
+// the Policy's require_attestation field. ValidateConfig names the
+// replacement, so a config written for an older provider gets a fix
+// rather than only a list of valid properties.
+const propertyDeviceAttested = "device_attested"
 
 // NewPolicyResource returns a new firezone_policy resource instance,
 // for use with FirezoneProvider.Resources.
@@ -79,6 +84,7 @@ type policyResourceModel struct {
 	Description           types.String           `tfsdk:"description"`
 	FlowLogUploadsEnabled types.Bool             `tfsdk:"flow_log_uploads_enabled"`
 	Enabled               types.Bool             `tfsdk:"enabled"`
+	RequireAttestation    types.Bool             `tfsdk:"require_attestation"`
 	Condition             []policyConditionModel `tfsdk:"condition"`
 	Posture               types.List             `tfsdk:"posture"`
 }
@@ -137,6 +143,15 @@ func (r *policyResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 					"without deleting it. Defaults to true, so a Policy disabled outside Terraform " +
 					"is re-enabled on the next apply unless this is set to false.",
 			},
+			"require_attestation": schema.BoolAttribute{
+				Optional: true,
+				Computed: true,
+				Default:  booldefault.StaticBool(false),
+				Description: "Whether this Policy grants access only to a Client that presented a valid " +
+					"X.509 certificate from one of the account's trust anchors on its current connection. " +
+					"Posture checks then match only identifiers proved by that certificate. Setting true " +
+					"fails if the account has no trust anchor. Replaces the device_attested condition.",
+			},
 		},
 		Blocks: map[string]schema.Block{
 			"condition": schema.ListNestedBlock{
@@ -145,9 +160,9 @@ func (r *policyResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 					Attributes: map[string]schema.Attribute{
 						"property": schema.StringAttribute{
 							Required: true,
-							Description: "One of remote_ip_location_region, remote_ip, auth_provider_id, current_utc_datetime, client_verified, device_attested. " +
-								"client_verified matches a device an admin has marked verified; device_attested matches a Client " +
-								"that presented a valid X.509 certificate from one of the account's trust anchors on its current connection.",
+							Description: "One of remote_ip_location_region, remote_ip, auth_provider_id, current_utc_datetime, client_verified. " +
+								"client_verified matches a device an admin has marked verified. To require a certificate, " +
+								"set require_attestation instead of a condition.",
 							Validators: []validator.String{
 								stringvalidator.OneOf(
 									"remote_ip_location_region",
@@ -155,7 +170,6 @@ func (r *policyResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 									"auth_provider_id",
 									"current_utc_datetime",
 									"client_verified",
-									"device_attested",
 								),
 							},
 						},
@@ -181,8 +195,8 @@ func (r *policyResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 								"current_utc_datetime, each value is a \"DAY/TIME_RANGES/TIMEZONE\" string " +
 								"where DAY is one of M T W R F S U, TIME_RANGES is a comma-separated list " +
 								"of HH:MM-HH:MM ranges, and TIMEZONE is an IANA timezone name - e.g. " +
-								"\"M/09:00-17:00/America/New_York\". One value per day. For client_verified " +
-								"and device_attested, a single value of \"true\" or \"false\".",
+								"\"M/09:00-17:00/America/New_York\". One value per day. For client_verified, " +
+								"a single value of \"true\" or \"false\".",
 						},
 					},
 				},
@@ -225,6 +239,17 @@ func (r *policyResource) ValidateConfig(ctx context.Context, req resource.Valida
 
 		property := condition.Property.ValueString()
 		operator := condition.Operator.ValueString()
+
+		if property == propertyDeviceAttested {
+			resp.Diagnostics.AddAttributeError(
+				path.Root("condition").AtListIndex(i).AtName("property"),
+				"Unsupported Condition Property",
+				"The device_attested condition was removed. Remove this condition block and set "+
+					"require_attestation = true on the Policy instead (or omit it if the condition's "+
+					"value was \"false\").",
+			)
+			continue
+		}
 
 		valid, known := validOperatorsForProperty[property]
 		if !known {
@@ -272,10 +297,9 @@ const propertyCurrentUTCDatetime = "current_utc_datetime"
 
 // booleanValueProperties are the condition properties whose values are a
 // single-element list holding "true" or "false".
-var booleanValueProperties = []string{"client_verified", "device_attested"}
+var booleanValueProperties = []string{"client_verified"}
 
-// validateBooleanValues checks that a client_verified or device_attested
-// condition carries exactly one value, "true" or "false". Anything else
+// validateBooleanValues checks that a client_verified condition carries exactly one value, "true" or "false". Anything else
 // is a 422 at apply time, after earlier resources in the same apply have
 // already been created.
 func validateBooleanValues(ctx context.Context, property string, values types.List, conditionIndex int, diags *fwDiagnostics) {
@@ -500,6 +524,7 @@ func (r *policyResource) Create(ctx context.Context, req resource.CreateRequest,
 	// Sent on create rather than disabling afterwards, so a Policy
 	// planned as disabled never grants access, even briefly.
 	isDisabled := !plan.Enabled.ValueBool()
+	requireAttestation := plan.RequireAttestation.ValueBool()
 	created, err := r.client.Policies.Create(ctx, &firezone.CreatePolicyRequest{
 		GroupID:               plan.GroupID.ValueString(),
 		ResourceID:            plan.ResourceID.ValueString(),
@@ -507,6 +532,7 @@ func (r *policyResource) Create(ctx context.Context, req resource.CreateRequest,
 		FlowLogUploadsEnabled: &flowLogUploadsEnabled,
 		IsDisabled:            &isDisabled,
 		Conditions:            conditions,
+		RequireAttestation:    &requireAttestation,
 		Postures:              postures,
 	})
 	if err != nil {
@@ -583,6 +609,7 @@ func (r *policyResource) Update(ctx context.Context, req resource.UpdateRequest,
 
 	flowLogUploadsEnabled := plan.FlowLogUploadsEnabled.ValueBool()
 	isDisabled := !plan.Enabled.ValueBool()
+	requireAttestation := plan.RequireAttestation.ValueBool()
 	updated, err := r.client.Policies.Update(ctx, plan.ID.ValueString(), &firezone.UpdatePolicyRequest{
 		GroupID:               plan.GroupID.ValueString(),
 		ResourceID:            plan.ResourceID.ValueString(),
@@ -590,6 +617,7 @@ func (r *policyResource) Update(ctx context.Context, req resource.UpdateRequest,
 		FlowLogUploadsEnabled: &flowLogUploadsEnabled,
 		IsDisabled:            &isDisabled,
 		Conditions:            &conditions,
+		RequireAttestation:    &requireAttestation,
 		Postures:              postures,
 	})
 	if err != nil {
@@ -636,6 +664,7 @@ func policyModelFromAPI(ctx context.Context, pol *firezone.Policy, model *policy
 	}
 	model.FlowLogUploadsEnabled = types.BoolValue(pol.FlowLogUploadsEnabled)
 	model.Enabled = types.BoolValue(!pol.IsDisabled)
+	model.RequireAttestation = types.BoolValue(pol.RequireAttestation)
 
 	conditions, diags := conditionsToModel(ctx, pol.Conditions)
 	model.Condition = conditions
