@@ -36,4 +36,4 @@ data "firezone_entra_auth_provider" "corp" {
 - `email_claim` (String) Which token claim the provider's email address is read from.
 - `is_default` (Boolean) Whether this provider is the account's default sign-in method.
 - `is_disabled` (Boolean) Whether the provider is disabled. A disabled provider cannot be used to sign in, but Policies may still reference it.
-- `issuer` (String) The provider's issuer identifier.
+- `tenant_ids` (List of String) The verified Microsoft Entra tenant IDs allowed to sign in with this provider.

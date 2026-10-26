@@ -16,6 +16,16 @@ resource "firezone_policy" "engineering_app_access" {
   }
 }
 
+# Grant access only to Clients that present a valid certificate from one of
+# the account's trust anchors. Fails at apply if the account has no trust
+# anchor. With a posture, checks then match only identifiers the certificate
+# proves.
+resource "firezone_policy" "attested_only" {
+  group_id            = data.firezone_group.engineering.id
+  resource_id         = firezone_resource.attested_app.id
+  require_attestation = true
+}
+
 # ---------------------------------------------------------------------------
 # Device posture
 #

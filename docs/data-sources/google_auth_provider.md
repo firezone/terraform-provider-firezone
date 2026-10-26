@@ -36,3 +36,4 @@ data "firezone_google_auth_provider" "corp" {
 - `is_default` (Boolean) Whether this provider is the account's default sign-in method.
 - `is_disabled` (Boolean) Whether the provider is disabled. A disabled provider cannot be used to sign in, but Policies may still reference it.
 - `issuer` (String) The provider's issuer identifier.
+- `workspace_domains` (List of String) The verified Google Workspace domains allowed to sign in with this provider. Empty means the provider is limited to personal accounts, or is an older provider with no domain restriction.

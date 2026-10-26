@@ -43,6 +43,7 @@ type groupDataSourceModel struct {
 	ID          types.String `tfsdk:"id"`
 	Name        types.String `tfsdk:"name"`
 	DirectoryID types.String `tfsdk:"directory_id"`
+	Type        types.String `tfsdk:"type"`
 }
 
 func (d *groupDataSource) Metadata(_ context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
@@ -76,6 +77,12 @@ func (d *groupDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, 
 					"to select the native, unsynced Group. Leave unset to match regardless of " +
 					"directory, which fails if the name is ambiguous. Always populated in the " +
 					"result, regardless of how the Group was looked up.",
+			},
+			"type": schema.StringAttribute{
+				Computed: true,
+				Description: "static for an ordinary Group, or managed for the built-in Everyone " +
+					"Group. A managed Group cannot be changed or deleted, and its members are " +
+					"set by Firezone, so firezone_group_membership cannot add to it.",
 			},
 		},
 	}
@@ -148,6 +155,7 @@ func (d *groupDataSource) Read(ctx context.Context, req datasource.ReadRequest, 
 	config.ID = types.StringValue(group.ID)
 	config.Name = types.StringValue(group.Name)
 	config.DirectoryID = types.StringValue(group.DirectoryID)
+	config.Type = types.StringValue(string(group.Type))
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &config)...)
 }

@@ -30,7 +30,7 @@ require (
 	github.com/bmatcuk/doublestar/v4 v4.10.0 // indirect
 	github.com/cloudflare/circl v1.6.3 // indirect
 	github.com/fatih/color v1.18.0 // indirect
-	github.com/firezone/firezone-sdk-go v0.1.2-0.20261022205634-55a85b6b3782
+	github.com/firezone/firezone-sdk-go v0.1.2-0.20261026021616-cd51d852da72
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect

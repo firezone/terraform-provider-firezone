@@ -39,11 +39,12 @@ type googleAuthProviderDataSource struct {
 // googleAuthProviderDataSourceModel mirrors the
 // firezone_google_auth_provider data source schema.
 type googleAuthProviderDataSourceModel struct {
-	ID         types.String `tfsdk:"id"`
-	Name       types.String `tfsdk:"name"`
-	Issuer     types.String `tfsdk:"issuer"`
-	IsDisabled types.Bool   `tfsdk:"is_disabled"`
-	IsDefault  types.Bool   `tfsdk:"is_default"`
+	ID               types.String `tfsdk:"id"`
+	Name             types.String `tfsdk:"name"`
+	Issuer           types.String `tfsdk:"issuer"`
+	WorkspaceDomains types.List   `tfsdk:"workspace_domains"`
+	IsDisabled       types.Bool   `tfsdk:"is_disabled"`
+	IsDefault        types.Bool   `tfsdk:"is_default"`
 }
 
 func (d *googleAuthProviderDataSource) Metadata(_ context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
@@ -71,6 +72,13 @@ func (d *googleAuthProviderDataSource) Schema(_ context.Context, _ datasource.Sc
 			"issuer": schema.StringAttribute{
 				Computed:    true,
 				Description: "The provider's issuer identifier.",
+			},
+			"workspace_domains": schema.ListAttribute{
+				ElementType: types.StringType,
+				Computed:    true,
+				Description: "The verified Google Workspace domains allowed to sign in with this " +
+					"provider. Empty means the provider is limited to personal accounts, or is an " +
+					"older provider with no domain restriction.",
 			},
 			"is_disabled": schema.BoolAttribute{
 				Computed: true,
@@ -143,6 +151,12 @@ func (d *googleAuthProviderDataSource) Read(ctx context.Context, req datasource.
 	config.ID = types.StringValue(provider.ID)
 	config.Name = types.StringValue(provider.Name)
 	config.Issuer = types.StringValue(provider.Issuer)
+	workspaceDomains, diags := stringListToModel(ctx, provider.WorkspaceDomains)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	config.WorkspaceDomains = workspaceDomains
 	config.IsDisabled = types.BoolValue(provider.IsDisabled)
 	config.IsDefault = types.BoolValue(provider.IsDefault)
 

@@ -34,6 +34,16 @@ resource "firezone_policy" "engineering_app_access" {
   }
 }
 
+# Grant access only to Clients that present a valid certificate from one of
+# the account's trust anchors. Fails at apply if the account has no trust
+# anchor. With a posture, checks then match only identifiers the certificate
+# proves.
+resource "firezone_policy" "attested_only" {
+  group_id            = data.firezone_group.engineering.id
+  resource_id         = firezone_resource.attested_app.id
+  require_attestation = true
+}
+
 # ---------------------------------------------------------------------------
 # Device posture
 #
@@ -813,6 +823,7 @@ resource "firezone_policy" "posture_staged" {
 - `posture` (Block List) Device posture requirements: checks the connecting device must pass, in addition to every condition, before this Policy grants access. The block is the root group of an and/or expression; nest group blocks for deeper logic. Needs the account's device_posture entitlement. Changing it revokes the Policy's active authorizations, so affected connections reauthorize.
 
 The API allows at most 10 levels of nesting (a negated group counts for two) and 100 checks. (see [below for nested schema](#nestedblock--posture))
+- `require_attestation` (Boolean) Whether this Policy grants access only to a Client that presented a valid X.509 certificate from one of the account's trust anchors on its current connection. Posture checks then match only identifiers proved by that certificate. Setting true fails if the account has no trust anchor. Replaces the device_attested condition.
 
 ### Read-Only
 
@@ -824,8 +835,8 @@ The API allows at most 10 levels of nesting (a negated group counts for two) and
 Required:
 
 - `operator` (String) One of is_in, is_not_in, is_in_cidr, is_not_in_cidr, is_in_day_of_week_time_ranges, is. Which are valid depends on property.
-- `property` (String) One of remote_ip_location_region, remote_ip, auth_provider_id, current_utc_datetime, client_verified, device_attested. client_verified matches a device an admin has marked verified; device_attested matches a Client that presented a valid X.509 certificate from one of the account's trust anchors on its current connection.
-- `values` (List of String) Values to compare against, interpreted per property. For current_utc_datetime, each value is a "DAY/TIME_RANGES/TIMEZONE" string where DAY is one of M T W R F S U, TIME_RANGES is a comma-separated list of HH:MM-HH:MM ranges, and TIMEZONE is an IANA timezone name - e.g. "M/09:00-17:00/America/New_York". One value per day. For client_verified and device_attested, a single value of "true" or "false".
+- `property` (String) One of remote_ip_location_region, remote_ip, auth_provider_id, current_utc_datetime, client_verified. client_verified matches a device an admin has marked verified. To require a certificate, set require_attestation instead of a condition.
+- `values` (List of String) Values to compare against, interpreted per property. For current_utc_datetime, each value is a "DAY/TIME_RANGES/TIMEZONE" string where DAY is one of M T W R F S U, TIME_RANGES is a comma-separated list of HH:MM-HH:MM ranges, and TIMEZONE is an IANA timezone name - e.g. "M/09:00-17:00/America/New_York". One value per day. For client_verified, a single value of "true" or "false".
 
 
 <a id="nestedblock--posture"></a>

@@ -17,3 +17,9 @@ data "firezone_group" "engineering_entra" {
   name         = "Engineering"
   directory_id = "42a7f82f-831a-4a9d-8f17-c66c2bb6e205"
 }
+
+# The built-in Everyone Group. Its type is "managed": it cannot be changed
+# or deleted, and Firezone sets its members.
+data "firezone_group" "everyone" {
+  name = "Everyone"
+}

@@ -32,8 +32,7 @@ func TestPolicyResourceValidateConfig(t *testing.T) {
 	conditionType := conditionListType.ElementType.(tftypes.Object)
 
 	condition := func(property, operator tftypes.Value) tftypes.Value {
-		// current_utc_datetime, client_verified, and device_attested
-		// values carry formats ValidateConfig checks; every other
+		// current_utc_datetime and client_verified values carry formats ValidateConfig checks; every other
 		// property's are opaque to it. Keep this helper's values valid so
 		// the pairing assertions below fail only on the pairing.
 		value := "x"
@@ -98,10 +97,6 @@ func TestPolicyResourceValidateConfig(t *testing.T) {
 			name:       "client_verified is",
 			conditions: []tftypes.Value{condition(str("client_verified"), str("is"))},
 		},
-		{
-			name:       "device_attested is",
-			conditions: []tftypes.Value{condition(str("device_attested"), str("is"))},
-		},
 
 		// Mismatches: each operator is individually valid, so only the
 		// pairing check catches these.
@@ -124,10 +119,13 @@ func TestPolicyResourceValidateConfig(t *testing.T) {
 			wantErrPart: `operator "is_in" does not apply`,
 		},
 		{
-			name:        "device_attested with is_in",
-			conditions:  []tftypes.Value{condition(str("device_attested"), str("is_in"))},
+			// Removed in favor of require_attestation. The error names the
+			// replacement so an old config gets a fix, not just a rejection.
+			name:        "device_attested points at require_attestation",
+			conditions:  []tftypes.Value{condition(str("device_attested"), str("is"))},
 			wantErr:     true,
-			wantErrPart: `Valid operators for "device_attested": is.`,
+			wantErrPart: "require_attestation = true",
+			wantPath:    "condition[0].property",
 		},
 		{
 			name:        "region with is_in_cidr",
@@ -211,6 +209,7 @@ func TestPolicyResourceValidateConfig(t *testing.T) {
 				"resource_id":              str("res-1"),
 				"description":              tftypes.NewValue(tftypes.String, nil),
 				"flow_log_uploads_enabled": tftypes.NewValue(tftypes.Bool, nil),
+				"require_attestation":      tftypes.NewValue(tftypes.Bool, nil),
 				"enabled":                  tftypes.NewValue(tftypes.Bool, nil),
 				"condition":                conditions,
 				"posture":                  tftypes.NewValue(objType.AttributeTypes["posture"], nil),
@@ -268,7 +267,6 @@ func TestValidOperatorsForProperty_CoversEveryProperty(t *testing.T) {
 		"auth_provider_id",
 		"current_utc_datetime",
 		"client_verified",
-		"device_attested",
 	}
 
 	for _, property := range properties {
@@ -284,7 +282,7 @@ func TestValidOperatorsForProperty_CoversEveryProperty(t *testing.T) {
 }
 
 // TestPolicyResourceValidateConfig_BooleanValues covers the single
-// "true"/"false" value carried by client_verified and device_attested.
+// "true"/"false" value carried by client_verified.
 func TestPolicyResourceValidateConfig_BooleanValues(t *testing.T) {
 	ctx := context.Background()
 
@@ -351,6 +349,7 @@ func TestPolicyResourceValidateConfig_BooleanValues(t *testing.T) {
 					"resource_id":              str("res-1"),
 					"description":              tftypes.NewValue(tftypes.String, nil),
 					"flow_log_uploads_enabled": tftypes.NewValue(tftypes.Bool, nil),
+					"require_attestation":      tftypes.NewValue(tftypes.Bool, nil),
 					"enabled":                  tftypes.NewValue(tftypes.Bool, nil),
 					"posture":                  tftypes.NewValue(objType.AttributeTypes["posture"], nil),
 					"condition": tftypes.NewValue(conditionListType, []tftypes.Value{
@@ -580,6 +579,7 @@ func TestPolicyResourceValidateConfig_DayTimeRangeValues(t *testing.T) {
 				"resource_id":              tftypes.NewValue(tftypes.String, "res-1"),
 				"description":              tftypes.NewValue(tftypes.String, nil),
 				"flow_log_uploads_enabled": tftypes.NewValue(tftypes.Bool, nil),
+				"require_attestation":      tftypes.NewValue(tftypes.Bool, nil),
 				"enabled":                  tftypes.NewValue(tftypes.Bool, nil),
 				"posture":                  tftypes.NewValue(objType.AttributeTypes["posture"], nil),
 				"condition": tftypes.NewValue(conditionListType, []tftypes.Value{

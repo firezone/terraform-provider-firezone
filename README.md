@@ -5,8 +5,9 @@ A Terraform provider for [Firezone](https://www.firezone.dev), built on
 [`firezone-go`](https://github.com/firezone/firezone-go) SDK
 
 Manages Sites, Gateways, Resources, Policies, Groups, Group Memberships,
-and Actors as resources. Looks up Sites, Groups, Actors, and IdP-synced
-directory connections (Entra, Google Workspace, Okta) as data sources.
+and Actors as resources. Looks up Sites, Groups, Group members, Actors,
+Clients, auth providers, and IdP-synced directory connections (Entra,
+Google Workspace, Okta) as data sources.
 
 Generated resource/data-source reference lives in [`docs/`](docs/).
 Worked examples for every resource and data source live in

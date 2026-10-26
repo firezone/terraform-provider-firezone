@@ -28,6 +28,7 @@ data "firezone_group" "by_name" {
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttrPair("data.firezone_group.by_id", "name", "firezone_group.test", "name"),
 					resource.TestCheckResourceAttrPair("data.firezone_group.by_name", "id", "firezone_group.test", "id"),
+					resource.TestCheckResourceAttr("data.firezone_group.by_id", "type", "static"),
 				),
 			},
 		},
