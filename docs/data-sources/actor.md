@@ -43,5 +43,6 @@ data "firezone_actor" "existing_admin_by_email" {
 ### Read-Only
 
 - `allow_email_otp_sign_in` (Boolean) Whether this Actor may sign in via a one-time passcode emailed to them.
+- `disabled_by_directory_id` (String) ID of the directory that disabled this Actor because it became inactive there. Null if the Actor is enabled or an admin disabled it.
 - `enabled` (Boolean) Whether the Actor is enabled.
 - `type` (String) One of account_user, account_admin_user, service_account, api_client.

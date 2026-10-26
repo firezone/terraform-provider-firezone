@@ -45,6 +45,7 @@ data "firezone_actor" "by_name_and_email" {
 					resource.TestCheckResourceAttrPair("data.firezone_actor.by_email", "id", "firezone_actor.test", "id"),
 					resource.TestCheckResourceAttrPair("data.firezone_actor.by_name_and_email", "id", "firezone_actor.test", "id"),
 					resource.TestCheckResourceAttr("data.firezone_actor.by_id", "type", "account_user"),
+					resource.TestCheckNoResourceAttr("data.firezone_actor.by_id", "disabled_by_directory_id"),
 				),
 			},
 		},

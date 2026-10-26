@@ -59,6 +59,15 @@ are listed under `### Changed`, with a note on what to do about them. From
   fails if the account has no trust anchor.
 - `tenant_ids` on the `firezone_entra_auth_provider` data source.
 - `workspace_domains` on the `firezone_google_auth_provider` data source.
+- The `firezone_clients` data source. It lists Clients and can filter
+  them by `actor_id`, `name`, `firezone_id`, `online`, `last_seen_before`,
+  `last_seen_after`, and `client_type`.
+- The `firezone_group_members` data source. It lists the members of a
+  Group with their `id`, `name`, `email`, and `type`. It also works for
+  synced Groups and the Everyone Group.
+- `type` on the `firezone_group` data source: `static`, or `managed` for
+  the Everyone Group.
+- `disabled_by_directory_id` on the `firezone_actor` data source.
 - The `firezone_github_auth_provider` data source.
 
 ### Fixed

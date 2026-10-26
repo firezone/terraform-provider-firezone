@@ -305,6 +305,8 @@ func (p *FirezoneProvider) DataSources(_ context.Context) []func() datasource.Da
 		NewGroupDataSource,
 		NewActorDataSource,
 		NewClientDataSource,
+		NewClientsDataSource,
+		NewGroupMembersDataSource,
 		NewEmailOTPAuthProviderDataSource,
 		NewOIDCAuthProviderDataSource,
 		NewGoogleAuthProviderDataSource,

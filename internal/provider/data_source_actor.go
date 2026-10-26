@@ -39,6 +39,7 @@ type actorDataSourceModel struct {
 	Type                types.String `tfsdk:"type"`
 	AllowEmailOTPSignIn types.Bool   `tfsdk:"allow_email_otp_sign_in"`
 	Enabled             types.Bool   `tfsdk:"enabled"`
+	DisabledByDirectory types.String `tfsdk:"disabled_by_directory_id"`
 }
 
 func (d *actorDataSource) Metadata(_ context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
@@ -80,6 +81,11 @@ func (d *actorDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, 
 			"enabled": schema.BoolAttribute{
 				Computed:    true,
 				Description: "Whether the Actor is enabled.",
+			},
+			"disabled_by_directory_id": schema.StringAttribute{
+				Computed: true,
+				Description: "ID of the directory that disabled this Actor because it became " +
+					"inactive there. Null if the Actor is enabled or an admin disabled it.",
 			},
 		},
 	}
@@ -169,6 +175,11 @@ func (d *actorDataSource) Read(ctx context.Context, req datasource.ReadRequest, 
 	config.Type = types.StringValue(string(actor.Type))
 	config.AllowEmailOTPSignIn = types.BoolValue(actor.AllowEmailOTPSignIn)
 	config.Enabled = types.BoolValue(!actor.IsDisabled)
+	if actor.DisabledByDirectoryID == "" {
+		config.DisabledByDirectory = types.StringNull()
+	} else {
+		config.DisabledByDirectory = types.StringValue(actor.DisabledByDirectoryID)
+	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &config)...)
 }
