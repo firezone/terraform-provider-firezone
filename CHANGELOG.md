@@ -16,6 +16,8 @@ are listed under `### Changed`, with a note on what to do about them. From
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-26
+
 ### Changed
 
 - **Breaking:** `firezone_policy` no longer accepts a `condition` block
@@ -75,4 +77,5 @@ are listed under `### Changed`, with a note on what to do about them. From
 - `internal/genposture` writes the generated posture file with 0600
   permissions.
 
-[Unreleased]: https://github.com/firezone/terraform-provider-firezone/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/firezone/terraform-provider-firezone/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/firezone/terraform-provider-firezone/compare/v0.2.0...v0.3.0
