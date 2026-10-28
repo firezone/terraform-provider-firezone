@@ -16,8 +16,78 @@ are listed under `### Changed`, with a note on what to do about them. From
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** `firezone_policy` takes `posture` as an attribute holding
+  an expression in plain HCL values, in place of the nested `posture`,
+  `group` and `check` blocks. A check is one object, `{ field = "...",
+  <operator> = <value> }`, and checks combine with `{ all = [...] }`,
+  `{ any = [...] }` and `{ not = {...} }`. Values take the attribute's own
+  type, so write `true` and `40`, not `"true"` and `"40"`. Rewrite each
+  block as follows:
+
+  ```hcl
+  # Before
+  posture {
+    operator = "and"
+
+    check {
+      field    = "intune.enrolled"
+      operator = "is"
+      value    = "true"
+    }
+
+    group {
+      operator = "or"
+      negate   = true
+
+      check {
+        field    = "sentinelone.active_threats"
+        operator = "gt"
+        value    = "0"
+      }
+
+      check {
+        field    = "intune.compliance_state"
+        operator = "is_in"
+        values   = ["noncompliant", "error"]
+        rows     = "all"
+      }
+    }
+  }
+
+  # After
+  posture = {
+    all = [
+      { field = "intune.enrolled", is = true },
+      { not = { any = [
+        { field = "sentinelone.active_threats", gt = 0 },
+        { field = "intune.compliance_state", is_in = ["noncompliant", "error"], rows = "all" },
+      ] } },
+    ]
+  }
+  ```
+
+  A group's `operator = "and"` becomes `all`, `"or"` becomes `any`, and
+  `negate = true` wraps the group in `not`. A check's `operator = "x"` and
+  `value` or `values` become `x = <value>`. Operators that take no value,
+  such as `exists`, are written `exists = true`. A plan with the old blocks
+  fails with an error. A plan with a string where the attribute takes a
+  boolean or number, such as `is = "true"`, fails with an error that says
+  to remove the quotes.
+
+  Existing state is upgraded on the first plan, and the Policy's posture
+  is not sent again. Expressions that are the same do not show as a
+  change. Changing a posture still revokes the Policy's active
+  authorizations, as before.
+
 ### Added
 
+- A posture is an ordinary HCL value. You can keep rules in `locals`,
+  variables or module outputs, share them between Policies, and generate
+  checks with `for` expressions.
+- Postures can nest to the API's full limit of 10 levels, and `not` can
+  wrap a single check.
 - `pkg/provider` Go package with `New(version)`, which returns a
   provider factory for in-process use, e.g. by Upjet-based Crossplane
   providers.

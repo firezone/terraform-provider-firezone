@@ -1,7 +1,7 @@
 // Command genposture writes internal/provider/policy_posture_fields_gen.go:
 // a table of every device posture field the Go SDK defines, with the kind
 // of value each takes. The provider uses it to validate a check's operator
-// and to convert its string value at plan time.
+// and to check its value's type at plan time.
 //
 // It reads the SDK's own generated constants, so the table follows
 // whichever SDK version go.mod pins. Run it with `go generate ./...`,
