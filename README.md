@@ -232,6 +232,24 @@ Acceptance tests need a running `firezone/firezone` dev server (Postgres
 `elixir/script/seed_api_client_token.exs`; see "Local development"
 above.
 
+## Using the provider as a Go library (Upjet/Crossplane)
+
+The `pkg/provider` package exposes the provider for
+[Upjet](https://github.com/crossplane/upjet)-based Crossplane providers,
+which run it in-process instead of as a plugin binary:
+
+```go
+import firezone "github.com/firezone/terraform-provider-firezone/pkg/provider"
+
+pc := ujconfig.NewProvider(schema, "firezone", modulePath, metadata,
+	ujconfig.WithTerraformPluginFrameworkProvider(firezone.New(version)()),
+	// ...
+)
+```
+
+`pkg/provider` is the only supported import path; everything under
+`internal/` remains private.
+
 ## Releasing
 
 See [RELEASING.md](RELEASING.md) for how to cut a release.
