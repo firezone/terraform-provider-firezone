@@ -51,21 +51,17 @@ resource "firezone_policy" "attested_only" {
 # condition, before the Policy grants access. Needs the account's
 # device_posture entitlement.
 #
-# The `posture` block is the root group of an and/or expression:
+# `posture` is an expression built from HCL objects. Each object is one of:
 #
-#   - `operator` is "and" (every check and group must hold) or "or" (at least
-#     one must).
-#   - `check` blocks compare one device attribute, named "<provider>.<attribute>",
-#     against a value. The provider is firezone (the connecting device itself),
-#     intune, iru, defender, santa, sentinelone or sophos.
-#   - `group` blocks nest another and/or group, up to the API's limit of 10
-#     levels and 100 checks.
-#   - `negate = true` inverts a group.
+#   - { all = [ ... ] }  every item must hold
+#   - { any = [ ... ] }  at least one item must hold
+#   - { not = { ... } }  the item must not hold
+#   - { field = "<provider>.<attribute>", <operator> = <value> }  a check
 #
-# `value` is always a string, whatever the attribute's type: "true", "40",
-# "14.4.1". The list operators take `values` instead. Which operators an
-# attribute accepts depends on its type, and the provider checks this at plan
-# time.
+# The provider in a field name is firezone (the connecting device itself),
+# intune, iru, defender, santa, sentinelone or sophos. Values take the
+# attribute's own type - true, 40, "14.4.1", ["a", "b"] - and the provider
+# checks at plan time that the operator and value fit the attribute.
 # ---------------------------------------------------------------------------
 
 # 1. The simplest posture: one check. The device must be enrolled in Intune.
@@ -73,243 +69,127 @@ resource "firezone_policy" "posture_single_check" {
   group_id    = data.firezone_group.engineering.id
   resource_id = firezone_resource.posture_single_check.id
 
-  posture {
-    operator = "and"
-
-    check {
-      field    = "intune.enrolled"
-      operator = "is"
-      value    = "true"
-    }
-  }
+  posture = { field = "intune.enrolled", is = true }
 }
 
-# 2. "and": every check must pass.
+# 2. "all": every check must pass.
 resource "firezone_policy" "posture_all_must_pass" {
   group_id    = data.firezone_group.engineering.id
   resource_id = firezone_resource.posture_all_must_pass.id
 
-  posture {
-    operator = "and"
-
-    check {
-      field    = "intune.enrolled"
-      operator = "is"
-      value    = "true"
-    }
-
-    check {
-      field    = "intune.compliance_state"
-      operator = "is"
-      value    = "compliant"
-    }
+  posture = {
+    all = [
+      { field = "intune.enrolled", is = true },
+      { field = "intune.compliance_state", is = "compliant" },
+    ]
   }
 }
 
-# 3. "or": any one check is enough. Here a device managed by either Intune or
-# Iru is accepted.
+# 3. "any": one passing check is enough. Here a device managed by either
+# Intune or Iru is accepted.
 resource "firezone_policy" "posture_any_may_pass" {
   group_id    = data.firezone_group.engineering.id
   resource_id = firezone_resource.posture_any_may_pass.id
 
-  posture {
-    operator = "or"
-
-    check {
-      field    = "intune.enrolled"
-      operator = "is"
-      value    = "true"
-    }
-
-    check {
-      field    = "iru.filevault_enabled"
-      operator = "is"
-      value    = "true"
-    }
+  posture = {
+    any = [
+      { field = "intune.enrolled", is = true },
+      { field = "iru.filevault_enabled", is = true },
+    ]
   }
 }
 
-# 4. Nested groups: (enrolled in Intune) AND (compliant OR in its grace
-# period). A group is combined with its siblings by the enclosing operator.
+# 4. Nesting: (enrolled in Intune) AND (compliant OR in its grace period).
 resource "firezone_policy" "posture_nested" {
   group_id    = data.firezone_group.engineering.id
   resource_id = firezone_resource.posture_nested.id
 
-  posture {
-    operator = "and"
-
-    check {
-      field    = "intune.enrolled"
-      operator = "is"
-      value    = "true"
-    }
-
-    group {
-      operator = "or"
-
-      check {
-        field    = "intune.compliance_state"
-        operator = "is"
-        value    = "compliant"
-      }
-
-      check {
-        field    = "intune.compliance_state"
-        operator = "is"
-        value    = "inGracePeriod"
-      }
-    }
+  posture = {
+    all = [
+      { field = "intune.enrolled", is = true },
+      { any = [
+        { field = "intune.compliance_state", is = "compliant" },
+        { field = "intune.compliance_state", is = "inGracePeriod" },
+      ] },
+    ]
   }
 }
 
-# 5. Negation: "none of these". A negated "or" group holds only when no check
-# inside it holds - here, the device must not be infected and must not have
-# active threats.
+# 5. "none of these": not around an "any". The device must not be infected
+# and must not have active threats.
 resource "firezone_policy" "posture_none_of" {
   group_id    = data.firezone_group.engineering.id
   resource_id = firezone_resource.posture_none_of.id
 
-  posture {
-    operator = "and"
-
-    check {
-      field    = "sentinelone.is_active"
-      operator = "is"
-      value    = "true"
-    }
-
-    group {
-      operator = "or"
-      negate   = true
-
-      check {
-        field    = "sentinelone.infected"
-        operator = "is"
-        value    = "true"
-      }
-
-      check {
-        field    = "sentinelone.active_threats"
-        operator = "gt"
-        value    = "0"
-      }
-    }
+  posture = {
+    all = [
+      { field = "sentinelone.is_active", is = true },
+      { not = { any = [
+        { field = "sentinelone.infected", is = true },
+        { field = "sentinelone.active_threats", gt = 0 },
+      ] } },
+    ]
   }
 }
 
-# 6. Negation: "not all of these". A negated "and" group holds unless every
-# check inside it holds.
+# 6. "not all of these": not around an "all". Blocks devices that are both
+# outdated and decommissioned.
 resource "firezone_policy" "posture_not_all_of" {
   group_id    = data.firezone_group.engineering.id
   resource_id = firezone_resource.posture_not_all_of.id
 
-  posture {
-    operator = "and"
-
-    check {
-      field    = "firezone.last_seen_version"
-      operator = "gte"
-      value    = "1.5.0"
-    }
-
-    # Block devices that are both outdated and decommissioned.
-    group {
-      operator = "and"
-      negate   = true
-
-      check {
-        field    = "sentinelone.is_up_to_date"
-        operator = "is"
-        value    = "false"
-      }
-
-      check {
-        field    = "sentinelone.is_decommissioned"
-        operator = "is"
-        value    = "true"
-      }
-    }
+  posture = {
+    all = [
+      { field = "firezone.last_seen_version", gte = "1.5.0" },
+      { not = { all = [
+        { field = "sentinelone.is_up_to_date", is = false },
+        { field = "sentinelone.is_decommissioned", is = true },
+      ] } },
+    ]
   }
 }
 
 # 7. Strings: is, is_not, contains, does_not_contain, starts_with, ends_with
-# and the regular expression operators matches and does_not_match. Comparison
-# ignores case.
+# and the regular expression operators matches and does_not_match.
+# Comparison ignores case.
 resource "firezone_policy" "posture_string_operators" {
   group_id    = data.firezone_group.engineering.id
   resource_id = firezone_resource.posture_string_operators.id
 
-  posture {
-    operator = "and"
-
-    check {
-      field    = "firezone.hostname"
-      operator = "starts_with"
-      value    = "corp-"
-    }
-
-    check {
-      field    = "firezone.name"
-      operator = "does_not_contain"
-      value    = "personal"
-    }
-
-    check {
-      field    = "firezone.device_serial"
-      operator = "matches"
-      value    = "^C02[A-Z0-9]{8}$"
-    }
-
-    check {
-      field    = "iru.platform"
-      operator = "is_not"
-      value    = "tvOS"
-    }
+  posture = {
+    all = [
+      { field = "firezone.hostname", starts_with = "corp-" },
+      { field = "firezone.name", does_not_contain = "personal" },
+      { field = "firezone.device_serial", matches = "^C02[A-Z0-9]{8}$" },
+      { field = "iru.platform", is_not = "tvOS" },
+    ]
   }
 }
 
-# 8. A list of strings: is_in and is_not_in take `values`.
+# 8. Lists of strings: is_in and is_not_in.
 resource "firezone_policy" "posture_string_lists" {
   group_id    = data.firezone_group.engineering.id
   resource_id = firezone_resource.posture_string_lists.id
 
-  posture {
-    operator = "and"
-
-    check {
-      field    = "intune.compliance_state"
-      operator = "is_in"
-      values   = ["compliant", "inGracePeriod"]
-    }
-
-    check {
-      field    = "defender.health_status"
-      operator = "is_not_in"
-      values   = ["Inactive", "ImpairedCommunication", "NoSensorData"]
-    }
+  posture = {
+    all = [
+      { field = "intune.compliance_state", is_in = ["compliant", "inGracePeriod"] },
+      { field = "defender.health_status", is_not_in = ["Inactive", "ImpairedCommunication", "NoSensorData"] },
+    ]
   }
 }
 
-# 9. Versions: compare dotted versions with is, is_not, gt, gte, lt and lte.
+# 9. Versions: is, is_not, gt, gte, lt and lte. Write versions as strings;
 # 14.4 and 14.4.0 compare equal.
 resource "firezone_policy" "posture_versions" {
   group_id    = data.firezone_group.engineering.id
   resource_id = firezone_resource.posture_versions.id
 
-  posture {
-    operator = "and"
-
-    check {
-      field    = "intune.os_version"
-      operator = "gte"
-      value    = "14.4"
-    }
-
-    check {
-      field    = "santa.santa_version"
-      operator = "gte"
-      value    = "2024.6"
-    }
+  posture = {
+    all = [
+      { field = "intune.os_version", gte = "14.4" },
+      { field = "santa.santa_version", gte = "2024.6" },
+    ]
   }
 }
 
@@ -319,43 +199,20 @@ resource "firezone_policy" "posture_latest_client" {
   group_id    = data.firezone_group.engineering.id
   resource_id = firezone_resource.posture_latest_client.id
 
-  posture {
-    operator = "and"
-
-    check {
-      field    = "firezone.last_seen_version"
-      operator = "gte"
-      value    = "@latest"
-    }
-  }
+  posture = { field = "firezone.last_seen_version", gte = "@latest" }
 }
 
-# 11. Numbers: integers take eq, ne, gt, gte, lt and lte. Write the number as
-# a string in its shortest form ("40", "0.5" - not "040" or "0.50").
+# 11. Numbers: integers and floats take eq, ne, gt, gte, lt and lte.
 resource "firezone_policy" "posture_numbers" {
   group_id    = data.firezone_group.engineering.id
   resource_id = firezone_resource.posture_numbers.id
 
-  posture {
-    operator = "and"
-
-    check {
-      field    = "sentinelone.active_threats"
-      operator = "eq"
-      value    = "0"
-    }
-
-    check {
-      field    = "santa.sip_status"
-      operator = "gt"
-      value    = "0"
-    }
-
-    check {
-      field    = "iru.device_capacity_gb"
-      operator = "gte"
-      value    = "0.5"
-    }
+  posture = {
+    all = [
+      { field = "sentinelone.active_threats", eq = 0 },
+      { field = "santa.sip_status", gt = 0 },
+      { field = "iru.device_capacity_gb", gte = 0.5 },
+    ]
   }
 }
 
@@ -366,29 +223,15 @@ resource "firezone_policy" "posture_timestamps" {
   group_id    = data.firezone_group.engineering.id
   resource_id = firezone_resource.posture_timestamps.id
 
-  posture {
-    operator = "and"
-
-    # Checked in with Intune in the last 24 hours.
-    check {
-      field    = "intune.last_sync_at"
-      operator = "within_last"
-      value    = "PT24H"
-    }
-
-    # Seen by Defender in the last 30 days.
-    check {
-      field    = "defender.last_seen_at"
-      operator = "within_last"
-      value    = "P30D"
-    }
-
-    # Enrolled before 2025.
-    check {
-      field    = "intune.enrolled_at"
-      operator = "before"
-      value    = "2025-01-01T00:00:00Z"
-    }
+  posture = {
+    all = [
+      # Checked in with Intune in the last 24 hours.
+      { field = "intune.last_sync_at", within_last = "PT24H" },
+      # Seen by Defender in the last 30 days.
+      { field = "defender.last_seen_at", within_last = "P30D" },
+      # Enrolled before 2025.
+      { field = "intune.enrolled_at", before = "2025-01-01T00:00:00Z" },
+    ]
   }
 }
 
@@ -398,61 +241,29 @@ resource "firezone_policy" "posture_ip_ranges" {
   group_id    = data.firezone_group.engineering.id
   resource_id = firezone_resource.posture_ip_ranges.id
 
-  posture {
-    operator = "and"
-
-    check {
-      field    = "defender.last_ip_address"
-      operator = "is_in_cidr"
-      values   = ["10.0.0.0/8", "fd00::/8"]
-    }
-
-    check {
-      field    = "firezone.ipv4"
-      operator = "is_not_in_cidr"
-      values   = ["10.99.0.0/16"]
-    }
+  posture = {
+    all = [
+      { field = "defender.last_ip_address", is_in_cidr = ["10.0.0.0/8", "fd00::/8"] },
+      { field = "firezone.ipv4", is_not_in_cidr = ["10.99.0.0/16"] },
+    ]
   }
 }
 
 # 14. Lists of values on the device: contains and does_not_contain take one
-# value; contains_any_of and contains_all_of take `values`; is_empty and
-# is_not_empty take neither.
+# value; contains_any_of and contains_all_of take a list; is_empty and
+# is_not_empty take none, so they are written `= true`.
 resource "firezone_policy" "posture_device_lists" {
   group_id    = data.firezone_group.engineering.id
   resource_id = firezone_resource.posture_device_lists.id
 
-  posture {
-    operator = "and"
-
-    check {
-      field    = "iru.tags"
-      operator = "contains"
-      value    = "managed"
-    }
-
-    check {
-      field    = "iru.tags"
-      operator = "does_not_contain"
-      value    = "quarantined"
-    }
-
-    check {
-      field    = "defender.machine_tags"
-      operator = "contains_any_of"
-      values   = ["corp", "contractor"]
-    }
-
-    check {
-      field    = "santa.primary_user_groups"
-      operator = "contains_all_of"
-      values   = ["engineering", "staff"]
-    }
-
-    check {
-      field    = "sentinelone.active_protection"
-      operator = "is_not_empty"
-    }
+  posture = {
+    all = [
+      { field = "iru.tags", contains = "managed" },
+      { field = "iru.tags", does_not_contain = "quarantined" },
+      { field = "defender.machine_tags", contains_any_of = ["corp", "contractor"] },
+      { field = "santa.primary_user_groups", contains_all_of = ["engineering", "staff"] },
+      { field = "sentinelone.active_protection", is_not_empty = true },
+    ]
   }
 }
 
@@ -463,18 +274,11 @@ resource "firezone_policy" "posture_exists" {
   group_id    = data.firezone_group.engineering.id
   resource_id = firezone_resource.posture_exists.id
 
-  posture {
-    operator = "and"
-
-    check {
-      field    = "iru.serial_number"
-      operator = "exists"
-    }
-
-    check {
-      field    = "santa.temporary_admin_mode_user"
-      operator = "does_not_exist"
-    }
+  posture = {
+    all = [
+      { field = "iru.serial_number", exists = true },
+      { field = "santa.temporary_admin_mode_user", does_not_exist = true },
+    ]
   }
 }
 
@@ -486,22 +290,11 @@ resource "firezone_policy" "posture_rows" {
   group_id    = data.firezone_group.engineering.id
   resource_id = firezone_resource.posture_rows.id
 
-  posture {
-    operator = "and"
-
-    check {
-      field    = "intune.compliance_state"
-      operator = "is"
-      value    = "compliant"
-      rows     = "all"
-    }
-
-    check {
-      field    = "defender.os_up_to_date"
-      operator = "is"
-      value    = "true"
-      rows     = "any"
-    }
+  posture = {
+    all = [
+      { field = "intune.compliance_state", is = "compliant", rows = "all" },
+      { field = "defender.os_up_to_date", is = true },
+    ]
   }
 }
 
@@ -511,26 +304,12 @@ resource "firezone_policy" "posture_firezone_device" {
   group_id    = data.firezone_group.engineering.id
   resource_id = firezone_resource.posture_firezone_device.id
 
-  posture {
-    operator = "and"
-
-    check {
-      field    = "firezone.last_seen_version"
-      operator = "gte"
-      value    = "1.5.0"
-    }
-
-    check {
-      field    = "firezone.last_attested_at"
-      operator = "within_last"
-      value    = "PT12H"
-    }
-
-    check {
-      field    = "firezone.last_seen_remote_ip_location_city"
-      operator = "is_in"
-      values   = ["San Francisco", "London", "Berlin"]
-    }
+  posture = {
+    all = [
+      { field = "firezone.last_seen_version", gte = "1.5.0" },
+      { field = "firezone.last_attested_at", within_last = "PT12H" },
+      { field = "firezone.last_seen_remote_ip_location_city", is_in = ["San Francisco", "London", "Berlin"] },
+    ]
   }
 }
 
@@ -540,143 +319,59 @@ resource "firezone_policy" "posture_macos_hardening" {
   group_id    = data.firezone_group.engineering.id
   resource_id = firezone_resource.posture_macos_hardening.id
 
-  posture {
-    operator = "and"
-
-    check {
-      field    = "iru.filevault_enabled"
-      operator = "is"
-      value    = "true"
-    }
-
-    check {
-      field    = "iru.firewall_enabled"
-      operator = "is"
-      value    = "true"
-    }
-
-    group {
-      operator = "or"
-
-      check {
-        field    = "iru.os_up_to_date"
-        operator = "is"
-        value    = "true"
-      }
-
-      check {
-        field    = "santa.os_up_to_date"
-        operator = "is"
-        value    = "true"
-      }
-    }
+  posture = {
+    all = [
+      { field = "iru.filevault_enabled", is = true },
+      { field = "iru.firewall_enabled", is = true },
+      { any = [
+        { field = "iru.os_up_to_date", is = true },
+        { field = "santa.os_up_to_date", is = true },
+      ] },
+    ]
   }
 }
 
-# 19. Deeper nesting: (A and (B or (C and not D))). Groups nest to 10 levels
-# in the API; a negated group counts for two.
+# 19. Deeper nesting: A and (B or (C and not D)). The API allows 10 levels of
+# all, any and not above a check.
 resource "firezone_policy" "posture_deeply_nested" {
   group_id    = data.firezone_group.engineering.id
   resource_id = firezone_resource.posture_deeply_nested.id
 
-  posture {
-    operator = "and"
-
-    check {
-      field    = "firezone.last_seen_version"
-      operator = "gte"
-      value    = "@latest"
-    }
-
-    group {
-      operator = "or"
-
-      check {
-        field    = "intune.enrolled"
-        operator = "is"
-        value    = "true"
-      }
-
-      group {
-        operator = "and"
-
-        check {
-          field    = "sophos.tamper_protection_enabled"
-          operator = "is"
-          value    = "true"
-        }
-
-        group {
-          operator = "or"
-          negate   = true
-
-          check {
-            field    = "sophos.health_overall"
-            operator = "is"
-            value    = "bad"
-          }
-        }
-      }
-    }
+  posture = {
+    all = [
+      { field = "firezone.last_seen_version", gte = "@latest" },
+      { any = [
+        { field = "intune.enrolled", is = true },
+        { all = [
+          { field = "sophos.tamper_protection_enabled", is = true },
+          { not = { field = "sophos.health_overall", is = "bad" } },
+        ] },
+      ] },
+    ]
   }
 }
 
-# 20. Several groups side by side: (Windows managed) OR (macOS managed) OR
-# (Linux with Defender). Each `group` is one alternative.
+# 20. Alternatives side by side: (Windows managed) OR (macOS managed) OR
+# (Linux with Defender).
 resource "firezone_policy" "posture_per_platform" {
   group_id    = data.firezone_group.engineering.id
   resource_id = firezone_resource.posture_per_platform.id
 
-  posture {
-    operator = "or"
-
-    group {
-      operator = "and"
-
-      check {
-        field    = "intune.enrolled"
-        operator = "is"
-        value    = "true"
-      }
-
-      check {
-        field    = "intune.os_version"
-        operator = "gte"
-        value    = "10.0.22621"
-      }
-    }
-
-    group {
-      operator = "and"
-
-      check {
-        field    = "iru.filevault_enabled"
-        operator = "is"
-        value    = "true"
-      }
-
-      check {
-        field    = "iru.os_version"
-        operator = "gte"
-        value    = "14.4"
-      }
-    }
-
-    group {
-      operator = "and"
-
-      check {
-        field    = "defender.health_status"
-        operator = "is"
-        value    = "Active"
-      }
-
-      check {
-        field    = "defender.os_platform"
-        operator = "is"
-        value    = "Linux"
-      }
-    }
+  posture = {
+    any = [
+      { all = [
+        { field = "intune.enrolled", is = true },
+        { field = "intune.os_version", gte = "10.0.22621" },
+      ] },
+      { all = [
+        { field = "iru.filevault_enabled", is = true },
+        { field = "iru.os_version", gte = "14.4" },
+      ] },
+      { all = [
+        { field = "defender.health_status", is = "Active" },
+        { field = "defender.os_platform", is = "Linux" },
+      ] },
+    ]
   }
 }
 
@@ -706,18 +401,10 @@ resource "firezone_policy" "posture_with_conditions" {
     ]
   }
 
-  posture {
-    operator = "and"
-
-    check {
-      field    = "intune.compliance_state"
-      operator = "is"
-      value    = "compliant"
-    }
-  }
+  posture = { field = "intune.compliance_state", is = "compliant" }
 }
 
-# 22. Building a posture from variables. Any argument can come from an
+# 22. Building a posture from variables. Any value can come from an
 # expression; here the minimum OS version and allowed states are inputs.
 variable "minimum_os_version" {
   type    = string
@@ -733,60 +420,54 @@ resource "firezone_policy" "posture_from_variables" {
   group_id    = data.firezone_group.engineering.id
   resource_id = firezone_resource.posture_from_variables.id
 
-  posture {
-    operator = "and"
-
-    check {
-      field    = "intune.os_version"
-      operator = "gte"
-      value    = var.minimum_os_version
-    }
-
-    check {
-      field    = "intune.compliance_state"
-      operator = "is_in"
-      values   = var.allowed_compliance_states
-    }
+  posture = {
+    all = [
+      { field = "intune.os_version", gte = var.minimum_os_version },
+      { field = "intune.compliance_state", is_in = var.allowed_compliance_states },
+    ]
   }
 }
 
-# 23. Repeating a check from a list with a dynamic block. Each Intune
-# compliance state to refuse becomes one check inside a negated "or" group.
+# 23. Generating checks with a for expression. Each Intune compliance state
+# to refuse becomes one check inside a "not any".
 locals {
   refused_states = ["noncompliant", "error", "conflict", "configManager"]
 }
 
-resource "firezone_policy" "posture_dynamic_checks" {
+resource "firezone_policy" "posture_generated_checks" {
   group_id    = data.firezone_group.engineering.id
-  resource_id = firezone_resource.posture_dynamic_checks.id
+  resource_id = firezone_resource.posture_generated_checks.id
 
-  posture {
-    operator = "and"
-
-    check {
-      field    = "intune.enrolled"
-      operator = "is"
-      value    = "true"
-    }
-
-    group {
-      operator = "or"
-      negate   = true
-
-      dynamic "check" {
-        for_each = local.refused_states
-
-        content {
-          field    = "intune.compliance_state"
-          operator = "is"
-          value    = check.value
-        }
-      }
-    }
+  posture = {
+    all = [
+      { field = "intune.enrolled", is = true },
+      { not = { any = [
+        for state in local.refused_states : { field = "intune.compliance_state", is = state }
+      ] } },
+    ]
   }
 }
 
-# 24. A posture on a disabled Policy: written now, switched on later by
+# 24. Reusing rules. A posture is an ordinary value, so a rule written once
+# in locals (or a module output) can be shared by every Policy that needs it.
+locals {
+  managed_mac = {
+    all = [
+      { field = "iru.filevault_enabled", is = true },
+      { field = "iru.firewall_enabled", is = true },
+    ]
+  }
+  current_client = { field = "firezone.last_seen_version", gte = "@latest" }
+}
+
+resource "firezone_policy" "posture_shared_rules" {
+  group_id    = data.firezone_group.engineering.id
+  resource_id = firezone_resource.posture_shared_rules.id
+
+  posture = { all = [local.managed_mac, local.current_client] }
+}
+
+# 25. A posture on a disabled Policy: written now, switched on later by
 # setting enabled = true. Changing a posture revokes the Policy's active
 # authorizations, so connections reauthorize.
 resource "firezone_policy" "posture_staged" {
@@ -794,15 +475,7 @@ resource "firezone_policy" "posture_staged" {
   resource_id = firezone_resource.posture_staged.id
   enabled     = false
 
-  posture {
-    operator = "and"
-
-    check {
-      field    = "intune.compliance_state"
-      operator = "is"
-      value    = "compliant"
-    }
-  }
+  posture = { field = "intune.compliance_state", is = "compliant" }
 }
 ```
 
@@ -820,9 +493,30 @@ resource "firezone_policy" "posture_staged" {
 - `description` (String) Human-readable description of why this access is granted.
 - `enabled` (Boolean) Whether this Policy grants access. Set false to stop it granting access without deleting it. Defaults to true, so a Policy disabled outside Terraform is re-enabled on the next apply unless this is set to false.
 - `flow_log_uploads_enabled` (Boolean) Whether flow logs are uploaded for connections authorized by this Policy.
-- `posture` (Block List) Device posture requirements: checks the connecting device must pass, in addition to every condition, before this Policy grants access. The block is the root group of an and/or expression; nest group blocks for deeper logic. Needs the account's device_posture entitlement. Changing it revokes the Policy's active authorizations, so affected connections reauthorize.
+- `posture` (Dynamic) Device posture requirements: checks the connecting device must pass, in addition to every condition, before this Policy grants access. Needs the account's device_posture entitlement. Changing it revokes the Policy's active authorizations, so affected connections reauthorize.
 
-The API allows at most 10 levels of nesting (a negated group counts for two) and 100 checks. (see [below for nested schema](#nestedblock--posture))
+The value is an expression built from HCL objects. Each object is exactly one of:
+
+- `{ all = [ ... ] }`: holds when every item holds.
+- `{ any = [ ... ] }`: holds when at least one item holds.
+- `{ not = { ... } }`: holds when its item does not.
+- `{ field = "<provider>.<attribute>", <operator> = <value> }`: a check of one device attribute. The provider is firezone (the connecting device itself), intune, iru, defender, santa, sentinelone or sophos. A check may also set `rows = "all"`, so that it holds only when every record the integration provider has for the device passes; the default, `"any"`, needs one. rows does not apply to firezone attributes.
+
+The value's type follows the attribute's: `true` or `false` for a boolean, a number for an integer or float, a string for a string, version or timestamp, and a list of strings for the list operators. Operators by attribute type:
+
+- boolean: `is`
+- string: `is`, `is_not`, `contains`, `does_not_contain`, `starts_with`, `ends_with`, `matches`, `does_not_match` (regular expressions), `is_in`, `is_not_in` (lists). Comparison ignores case.
+- integer, float: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`
+- version: `is`, `is_not`, `gt`, `gte`, `lt`, `lte`, with a dotted version such as `"14.4.1"`. For firezone.last_seen_version, `"@latest"` means the newest Client release for the device's platform.
+- timestamp: `before`, `after` with an ISO 8601 datetime; `within_last`, `not_within_last` with an ISO 8601 duration such as `"PT24H"` or `"P30D"`
+- IP address: `is_in_cidr`, `is_not_in_cidr`, with a list of CIDRs
+- string list: `contains`, `does_not_contain` with a string; `contains_any_of`, `contains_all_of` with a list; `is_empty`, `is_not_empty`
+- JSON: `is_empty`, `is_not_empty`
+- every attribute: `exists`, `does_not_exist`
+
+Operators that take no value are written `= true`, for example `{ field = "iru.serial_number", exists = true }`. A missing attribute fails every operator except does_not_exist, including negative ones such as is_not.
+
+The API allows at most 10 levels of all/any/not above a check and 100 checks. Importing a Policy reads its posture back in this form.
 - `require_attestation` (Boolean) Whether this Policy grants access only to a Client that presented a valid X.509 certificate from one of the account's trust anchors on its current connection. Posture checks then match only identifiers proved by that certificate. Setting true fails if the account has no trust anchor. Replaces the device_attested condition.
 
 ### Read-Only
@@ -837,282 +531,3 @@ Required:
 - `operator` (String) One of is_in, is_not_in, is_in_cidr, is_not_in_cidr, is_in_day_of_week_time_ranges, is. Which are valid depends on property.
 - `property` (String) One of remote_ip_location_region, remote_ip, auth_provider_id, current_utc_datetime, client_verified. client_verified matches a device an admin has marked verified. To require a certificate, set require_attestation instead of a condition.
 - `values` (List of String) Values to compare against, interpreted per property. For current_utc_datetime, each value is a "DAY/TIME_RANGES/TIMEZONE" string where DAY is one of M T W R F S U, TIME_RANGES is a comma-separated list of HH:MM-HH:MM ranges, and TIMEZONE is an IANA timezone name - e.g. "M/09:00-17:00/America/New_York". One value per day. For client_verified, a single value of "true" or "false".
-
-
-<a id="nestedblock--posture"></a>
-### Nested Schema for `posture`
-
-Required:
-
-- `operator` (String) "and" holds when every check and group in this group holds; "or" when at least one does.
-
-Optional:
-
-- `check` (Block List) Compares one device attribute against a value. (see [below for nested schema](#nestedblock--posture--check))
-- `group` (Block List) A nested group of checks, combined with the enclosing group's operator like any other check. (see [below for nested schema](#nestedblock--posture--group))
-- `negate` (Boolean) Invert the group: it holds when the and/or would not. Counts for two levels of the API's nesting limit.
-
-<a id="nestedblock--posture--check"></a>
-### Nested Schema for `posture.check`
-
-Required:
-
-- `field` (String) The attribute to test, as "<provider>.<attribute>", for example "intune.compliance_state" or "firezone.last_seen_version". The provider is one of firezone (the connecting device itself), intune, iru, defender, santa, sentinelone or sophos. See the Firezone documentation for each provider's attributes.
-- `operator` (String) The comparison. Which operators apply depends on the attribute's type and the API rejects a mismatch. Every attribute takes exists and does_not_exist; strings take is, is_not, is_in, is_not_in, contains, does_not_contain, starts_with, ends_with, matches, does_not_match; booleans take is; integers and floats take eq, ne, gt, gte, lt, lte; versions take is, is_not, gt, gte, lt, lte; timestamps take before, after, within_last, not_within_last; IP addresses take is_in_cidr, is_not_in_cidr; lists take contains_any_of, contains_all_of, is_empty, is_not_empty. Note that a missing attribute fails every operator except does_not_exist, including negative ones such as is_not.
-
-Optional:
-
-- `rows` (String) How the check treats a device that matches more than one record of an integration provider: "any" holds when any matching record passes, "all" only when every one does. Defaults to "any". Not valid for firezone attributes, which always describe exactly one device.
-- `value` (String) The value to compare against, written as a string whatever the attribute's type: "true" or "false" for a boolean, a number such as "40" or "0.5" for an integer or float (written in its shortest form, so "0.5" and not "0.50"), a version such as "14.4.1" for a version. For a timestamp, an ISO 8601 datetime with before and after, or an ISO 8601 duration such as "PT24H" with within_last and not_within_last. For matches and does_not_match, a regular expression. For firezone.last_seen_version, "@latest" means the newest Client release for the device's platform. Not allowed for the list operators or the operators that take no value.
-- `values` (List of String) The strings to compare against, for the list operators is_in, is_not_in, contains_any_of, contains_all_of (1-100 strings) and is_in_cidr, is_not_in_cidr (1-100 CIDRs). Not allowed for any other operator.
-
-
-<a id="nestedblock--posture--group"></a>
-### Nested Schema for `posture.group`
-
-Required:
-
-- `operator` (String) "and" holds when every check and group in this group holds; "or" when at least one does.
-
-Optional:
-
-- `check` (Block List) Compares one device attribute against a value. (see [below for nested schema](#nestedblock--posture--group--check))
-- `group` (Block List) A nested group of checks, combined with the enclosing group's operator like any other check. (see [below for nested schema](#nestedblock--posture--group--group))
-- `negate` (Boolean) Invert the group: it holds when the and/or would not. Counts for two levels of the API's nesting limit.
-
-<a id="nestedblock--posture--group--check"></a>
-### Nested Schema for `posture.group.check`
-
-Required:
-
-- `field` (String) The attribute to test, as "<provider>.<attribute>", for example "intune.compliance_state" or "firezone.last_seen_version". The provider is one of firezone (the connecting device itself), intune, iru, defender, santa, sentinelone or sophos. See the Firezone documentation for each provider's attributes.
-- `operator` (String) The comparison. Which operators apply depends on the attribute's type and the API rejects a mismatch. Every attribute takes exists and does_not_exist; strings take is, is_not, is_in, is_not_in, contains, does_not_contain, starts_with, ends_with, matches, does_not_match; booleans take is; integers and floats take eq, ne, gt, gte, lt, lte; versions take is, is_not, gt, gte, lt, lte; timestamps take before, after, within_last, not_within_last; IP addresses take is_in_cidr, is_not_in_cidr; lists take contains_any_of, contains_all_of, is_empty, is_not_empty. Note that a missing attribute fails every operator except does_not_exist, including negative ones such as is_not.
-
-Optional:
-
-- `rows` (String) How the check treats a device that matches more than one record of an integration provider: "any" holds when any matching record passes, "all" only when every one does. Defaults to "any". Not valid for firezone attributes, which always describe exactly one device.
-- `value` (String) The value to compare against, written as a string whatever the attribute's type: "true" or "false" for a boolean, a number such as "40" or "0.5" for an integer or float (written in its shortest form, so "0.5" and not "0.50"), a version such as "14.4.1" for a version. For a timestamp, an ISO 8601 datetime with before and after, or an ISO 8601 duration such as "PT24H" with within_last and not_within_last. For matches and does_not_match, a regular expression. For firezone.last_seen_version, "@latest" means the newest Client release for the device's platform. Not allowed for the list operators or the operators that take no value.
-- `values` (List of String) The strings to compare against, for the list operators is_in, is_not_in, contains_any_of, contains_all_of (1-100 strings) and is_in_cidr, is_not_in_cidr (1-100 CIDRs). Not allowed for any other operator.
-
-
-<a id="nestedblock--posture--group--group"></a>
-### Nested Schema for `posture.group.group`
-
-Required:
-
-- `operator` (String) "and" holds when every check and group in this group holds; "or" when at least one does.
-
-Optional:
-
-- `check` (Block List) Compares one device attribute against a value. (see [below for nested schema](#nestedblock--posture--group--group--check))
-- `group` (Block List) A nested group of checks, combined with the enclosing group's operator like any other check. (see [below for nested schema](#nestedblock--posture--group--group--group))
-- `negate` (Boolean) Invert the group: it holds when the and/or would not. Counts for two levels of the API's nesting limit.
-
-<a id="nestedblock--posture--group--group--check"></a>
-### Nested Schema for `posture.group.group.check`
-
-Required:
-
-- `field` (String) The attribute to test, as "<provider>.<attribute>", for example "intune.compliance_state" or "firezone.last_seen_version". The provider is one of firezone (the connecting device itself), intune, iru, defender, santa, sentinelone or sophos. See the Firezone documentation for each provider's attributes.
-- `operator` (String) The comparison. Which operators apply depends on the attribute's type and the API rejects a mismatch. Every attribute takes exists and does_not_exist; strings take is, is_not, is_in, is_not_in, contains, does_not_contain, starts_with, ends_with, matches, does_not_match; booleans take is; integers and floats take eq, ne, gt, gte, lt, lte; versions take is, is_not, gt, gte, lt, lte; timestamps take before, after, within_last, not_within_last; IP addresses take is_in_cidr, is_not_in_cidr; lists take contains_any_of, contains_all_of, is_empty, is_not_empty. Note that a missing attribute fails every operator except does_not_exist, including negative ones such as is_not.
-
-Optional:
-
-- `rows` (String) How the check treats a device that matches more than one record of an integration provider: "any" holds when any matching record passes, "all" only when every one does. Defaults to "any". Not valid for firezone attributes, which always describe exactly one device.
-- `value` (String) The value to compare against, written as a string whatever the attribute's type: "true" or "false" for a boolean, a number such as "40" or "0.5" for an integer or float (written in its shortest form, so "0.5" and not "0.50"), a version such as "14.4.1" for a version. For a timestamp, an ISO 8601 datetime with before and after, or an ISO 8601 duration such as "PT24H" with within_last and not_within_last. For matches and does_not_match, a regular expression. For firezone.last_seen_version, "@latest" means the newest Client release for the device's platform. Not allowed for the list operators or the operators that take no value.
-- `values` (List of String) The strings to compare against, for the list operators is_in, is_not_in, contains_any_of, contains_all_of (1-100 strings) and is_in_cidr, is_not_in_cidr (1-100 CIDRs). Not allowed for any other operator.
-
-
-<a id="nestedblock--posture--group--group--group"></a>
-### Nested Schema for `posture.group.group.group`
-
-Required:
-
-- `operator` (String) "and" holds when every check and group in this group holds; "or" when at least one does.
-
-Optional:
-
-- `check` (Block List) Compares one device attribute against a value. (see [below for nested schema](#nestedblock--posture--group--group--group--check))
-- `group` (Block List) A nested group of checks, combined with the enclosing group's operator like any other check. (see [below for nested schema](#nestedblock--posture--group--group--group--group))
-- `negate` (Boolean) Invert the group: it holds when the and/or would not. Counts for two levels of the API's nesting limit.
-
-<a id="nestedblock--posture--group--group--group--check"></a>
-### Nested Schema for `posture.group.group.group.check`
-
-Required:
-
-- `field` (String) The attribute to test, as "<provider>.<attribute>", for example "intune.compliance_state" or "firezone.last_seen_version". The provider is one of firezone (the connecting device itself), intune, iru, defender, santa, sentinelone or sophos. See the Firezone documentation for each provider's attributes.
-- `operator` (String) The comparison. Which operators apply depends on the attribute's type and the API rejects a mismatch. Every attribute takes exists and does_not_exist; strings take is, is_not, is_in, is_not_in, contains, does_not_contain, starts_with, ends_with, matches, does_not_match; booleans take is; integers and floats take eq, ne, gt, gte, lt, lte; versions take is, is_not, gt, gte, lt, lte; timestamps take before, after, within_last, not_within_last; IP addresses take is_in_cidr, is_not_in_cidr; lists take contains_any_of, contains_all_of, is_empty, is_not_empty. Note that a missing attribute fails every operator except does_not_exist, including negative ones such as is_not.
-
-Optional:
-
-- `rows` (String) How the check treats a device that matches more than one record of an integration provider: "any" holds when any matching record passes, "all" only when every one does. Defaults to "any". Not valid for firezone attributes, which always describe exactly one device.
-- `value` (String) The value to compare against, written as a string whatever the attribute's type: "true" or "false" for a boolean, a number such as "40" or "0.5" for an integer or float (written in its shortest form, so "0.5" and not "0.50"), a version such as "14.4.1" for a version. For a timestamp, an ISO 8601 datetime with before and after, or an ISO 8601 duration such as "PT24H" with within_last and not_within_last. For matches and does_not_match, a regular expression. For firezone.last_seen_version, "@latest" means the newest Client release for the device's platform. Not allowed for the list operators or the operators that take no value.
-- `values` (List of String) The strings to compare against, for the list operators is_in, is_not_in, contains_any_of, contains_all_of (1-100 strings) and is_in_cidr, is_not_in_cidr (1-100 CIDRs). Not allowed for any other operator.
-
-
-<a id="nestedblock--posture--group--group--group--group"></a>
-### Nested Schema for `posture.group.group.group.group`
-
-Required:
-
-- `operator` (String) "and" holds when every check and group in this group holds; "or" when at least one does.
-
-Optional:
-
-- `check` (Block List) Compares one device attribute against a value. (see [below for nested schema](#nestedblock--posture--group--group--group--group--check))
-- `group` (Block List) A nested group of checks, combined with the enclosing group's operator like any other check. (see [below for nested schema](#nestedblock--posture--group--group--group--group--group))
-- `negate` (Boolean) Invert the group: it holds when the and/or would not. Counts for two levels of the API's nesting limit.
-
-<a id="nestedblock--posture--group--group--group--group--check"></a>
-### Nested Schema for `posture.group.group.group.group.check`
-
-Required:
-
-- `field` (String) The attribute to test, as "<provider>.<attribute>", for example "intune.compliance_state" or "firezone.last_seen_version". The provider is one of firezone (the connecting device itself), intune, iru, defender, santa, sentinelone or sophos. See the Firezone documentation for each provider's attributes.
-- `operator` (String) The comparison. Which operators apply depends on the attribute's type and the API rejects a mismatch. Every attribute takes exists and does_not_exist; strings take is, is_not, is_in, is_not_in, contains, does_not_contain, starts_with, ends_with, matches, does_not_match; booleans take is; integers and floats take eq, ne, gt, gte, lt, lte; versions take is, is_not, gt, gte, lt, lte; timestamps take before, after, within_last, not_within_last; IP addresses take is_in_cidr, is_not_in_cidr; lists take contains_any_of, contains_all_of, is_empty, is_not_empty. Note that a missing attribute fails every operator except does_not_exist, including negative ones such as is_not.
-
-Optional:
-
-- `rows` (String) How the check treats a device that matches more than one record of an integration provider: "any" holds when any matching record passes, "all" only when every one does. Defaults to "any". Not valid for firezone attributes, which always describe exactly one device.
-- `value` (String) The value to compare against, written as a string whatever the attribute's type: "true" or "false" for a boolean, a number such as "40" or "0.5" for an integer or float (written in its shortest form, so "0.5" and not "0.50"), a version such as "14.4.1" for a version. For a timestamp, an ISO 8601 datetime with before and after, or an ISO 8601 duration such as "PT24H" with within_last and not_within_last. For matches and does_not_match, a regular expression. For firezone.last_seen_version, "@latest" means the newest Client release for the device's platform. Not allowed for the list operators or the operators that take no value.
-- `values` (List of String) The strings to compare against, for the list operators is_in, is_not_in, contains_any_of, contains_all_of (1-100 strings) and is_in_cidr, is_not_in_cidr (1-100 CIDRs). Not allowed for any other operator.
-
-
-<a id="nestedblock--posture--group--group--group--group--group"></a>
-### Nested Schema for `posture.group.group.group.group.group`
-
-Required:
-
-- `operator` (String) "and" holds when every check and group in this group holds; "or" when at least one does.
-
-Optional:
-
-- `check` (Block List) Compares one device attribute against a value. (see [below for nested schema](#nestedblock--posture--group--group--group--group--group--check))
-- `group` (Block List) A nested group of checks, combined with the enclosing group's operator like any other check. (see [below for nested schema](#nestedblock--posture--group--group--group--group--group--group))
-- `negate` (Boolean) Invert the group: it holds when the and/or would not. Counts for two levels of the API's nesting limit.
-
-<a id="nestedblock--posture--group--group--group--group--group--check"></a>
-### Nested Schema for `posture.group.group.group.group.group.check`
-
-Required:
-
-- `field` (String) The attribute to test, as "<provider>.<attribute>", for example "intune.compliance_state" or "firezone.last_seen_version". The provider is one of firezone (the connecting device itself), intune, iru, defender, santa, sentinelone or sophos. See the Firezone documentation for each provider's attributes.
-- `operator` (String) The comparison. Which operators apply depends on the attribute's type and the API rejects a mismatch. Every attribute takes exists and does_not_exist; strings take is, is_not, is_in, is_not_in, contains, does_not_contain, starts_with, ends_with, matches, does_not_match; booleans take is; integers and floats take eq, ne, gt, gte, lt, lte; versions take is, is_not, gt, gte, lt, lte; timestamps take before, after, within_last, not_within_last; IP addresses take is_in_cidr, is_not_in_cidr; lists take contains_any_of, contains_all_of, is_empty, is_not_empty. Note that a missing attribute fails every operator except does_not_exist, including negative ones such as is_not.
-
-Optional:
-
-- `rows` (String) How the check treats a device that matches more than one record of an integration provider: "any" holds when any matching record passes, "all" only when every one does. Defaults to "any". Not valid for firezone attributes, which always describe exactly one device.
-- `value` (String) The value to compare against, written as a string whatever the attribute's type: "true" or "false" for a boolean, a number such as "40" or "0.5" for an integer or float (written in its shortest form, so "0.5" and not "0.50"), a version such as "14.4.1" for a version. For a timestamp, an ISO 8601 datetime with before and after, or an ISO 8601 duration such as "PT24H" with within_last and not_within_last. For matches and does_not_match, a regular expression. For firezone.last_seen_version, "@latest" means the newest Client release for the device's platform. Not allowed for the list operators or the operators that take no value.
-- `values` (List of String) The strings to compare against, for the list operators is_in, is_not_in, contains_any_of, contains_all_of (1-100 strings) and is_in_cidr, is_not_in_cidr (1-100 CIDRs). Not allowed for any other operator.
-
-
-<a id="nestedblock--posture--group--group--group--group--group--group"></a>
-### Nested Schema for `posture.group.group.group.group.group.group`
-
-Required:
-
-- `operator` (String) "and" holds when every check and group in this group holds; "or" when at least one does.
-
-Optional:
-
-- `check` (Block List) Compares one device attribute against a value. (see [below for nested schema](#nestedblock--posture--group--group--group--group--group--group--check))
-- `group` (Block List) A nested group of checks, combined with the enclosing group's operator like any other check. (see [below for nested schema](#nestedblock--posture--group--group--group--group--group--group--group))
-- `negate` (Boolean) Invert the group: it holds when the and/or would not. Counts for two levels of the API's nesting limit.
-
-<a id="nestedblock--posture--group--group--group--group--group--group--check"></a>
-### Nested Schema for `posture.group.group.group.group.group.group.check`
-
-Required:
-
-- `field` (String) The attribute to test, as "<provider>.<attribute>", for example "intune.compliance_state" or "firezone.last_seen_version". The provider is one of firezone (the connecting device itself), intune, iru, defender, santa, sentinelone or sophos. See the Firezone documentation for each provider's attributes.
-- `operator` (String) The comparison. Which operators apply depends on the attribute's type and the API rejects a mismatch. Every attribute takes exists and does_not_exist; strings take is, is_not, is_in, is_not_in, contains, does_not_contain, starts_with, ends_with, matches, does_not_match; booleans take is; integers and floats take eq, ne, gt, gte, lt, lte; versions take is, is_not, gt, gte, lt, lte; timestamps take before, after, within_last, not_within_last; IP addresses take is_in_cidr, is_not_in_cidr; lists take contains_any_of, contains_all_of, is_empty, is_not_empty. Note that a missing attribute fails every operator except does_not_exist, including negative ones such as is_not.
-
-Optional:
-
-- `rows` (String) How the check treats a device that matches more than one record of an integration provider: "any" holds when any matching record passes, "all" only when every one does. Defaults to "any". Not valid for firezone attributes, which always describe exactly one device.
-- `value` (String) The value to compare against, written as a string whatever the attribute's type: "true" or "false" for a boolean, a number such as "40" or "0.5" for an integer or float (written in its shortest form, so "0.5" and not "0.50"), a version such as "14.4.1" for a version. For a timestamp, an ISO 8601 datetime with before and after, or an ISO 8601 duration such as "PT24H" with within_last and not_within_last. For matches and does_not_match, a regular expression. For firezone.last_seen_version, "@latest" means the newest Client release for the device's platform. Not allowed for the list operators or the operators that take no value.
-- `values` (List of String) The strings to compare against, for the list operators is_in, is_not_in, contains_any_of, contains_all_of (1-100 strings) and is_in_cidr, is_not_in_cidr (1-100 CIDRs). Not allowed for any other operator.
-
-
-<a id="nestedblock--posture--group--group--group--group--group--group--group"></a>
-### Nested Schema for `posture.group.group.group.group.group.group.group`
-
-Required:
-
-- `operator` (String) "and" holds when every check and group in this group holds; "or" when at least one does.
-
-Optional:
-
-- `check` (Block List) Compares one device attribute against a value. (see [below for nested schema](#nestedblock--posture--group--group--group--group--group--group--group--check))
-- `group` (Block List) A nested group of checks, combined with the enclosing group's operator like any other check. (see [below for nested schema](#nestedblock--posture--group--group--group--group--group--group--group--group))
-- `negate` (Boolean) Invert the group: it holds when the and/or would not. Counts for two levels of the API's nesting limit.
-
-<a id="nestedblock--posture--group--group--group--group--group--group--group--check"></a>
-### Nested Schema for `posture.group.group.group.group.group.group.group.check`
-
-Required:
-
-- `field` (String) The attribute to test, as "<provider>.<attribute>", for example "intune.compliance_state" or "firezone.last_seen_version". The provider is one of firezone (the connecting device itself), intune, iru, defender, santa, sentinelone or sophos. See the Firezone documentation for each provider's attributes.
-- `operator` (String) The comparison. Which operators apply depends on the attribute's type and the API rejects a mismatch. Every attribute takes exists and does_not_exist; strings take is, is_not, is_in, is_not_in, contains, does_not_contain, starts_with, ends_with, matches, does_not_match; booleans take is; integers and floats take eq, ne, gt, gte, lt, lte; versions take is, is_not, gt, gte, lt, lte; timestamps take before, after, within_last, not_within_last; IP addresses take is_in_cidr, is_not_in_cidr; lists take contains_any_of, contains_all_of, is_empty, is_not_empty. Note that a missing attribute fails every operator except does_not_exist, including negative ones such as is_not.
-
-Optional:
-
-- `rows` (String) How the check treats a device that matches more than one record of an integration provider: "any" holds when any matching record passes, "all" only when every one does. Defaults to "any". Not valid for firezone attributes, which always describe exactly one device.
-- `value` (String) The value to compare against, written as a string whatever the attribute's type: "true" or "false" for a boolean, a number such as "40" or "0.5" for an integer or float (written in its shortest form, so "0.5" and not "0.50"), a version such as "14.4.1" for a version. For a timestamp, an ISO 8601 datetime with before and after, or an ISO 8601 duration such as "PT24H" with within_last and not_within_last. For matches and does_not_match, a regular expression. For firezone.last_seen_version, "@latest" means the newest Client release for the device's platform. Not allowed for the list operators or the operators that take no value.
-- `values` (List of String) The strings to compare against, for the list operators is_in, is_not_in, contains_any_of, contains_all_of (1-100 strings) and is_in_cidr, is_not_in_cidr (1-100 CIDRs). Not allowed for any other operator.
-
-
-<a id="nestedblock--posture--group--group--group--group--group--group--group--group"></a>
-### Nested Schema for `posture.group.group.group.group.group.group.group.group`
-
-Required:
-
-- `operator` (String) "and" holds when every check and group in this group holds; "or" when at least one does.
-
-Optional:
-
-- `check` (Block List) Compares one device attribute against a value. (see [below for nested schema](#nestedblock--posture--group--group--group--group--group--group--group--group--check))
-- `group` (Block List) A nested group of checks, combined with the enclosing group's operator like any other check. (see [below for nested schema](#nestedblock--posture--group--group--group--group--group--group--group--group--group))
-- `negate` (Boolean) Invert the group: it holds when the and/or would not. Counts for two levels of the API's nesting limit.
-
-<a id="nestedblock--posture--group--group--group--group--group--group--group--group--check"></a>
-### Nested Schema for `posture.group.group.group.group.group.group.group.group.check`
-
-Required:
-
-- `field` (String) The attribute to test, as "<provider>.<attribute>", for example "intune.compliance_state" or "firezone.last_seen_version". The provider is one of firezone (the connecting device itself), intune, iru, defender, santa, sentinelone or sophos. See the Firezone documentation for each provider's attributes.
-- `operator` (String) The comparison. Which operators apply depends on the attribute's type and the API rejects a mismatch. Every attribute takes exists and does_not_exist; strings take is, is_not, is_in, is_not_in, contains, does_not_contain, starts_with, ends_with, matches, does_not_match; booleans take is; integers and floats take eq, ne, gt, gte, lt, lte; versions take is, is_not, gt, gte, lt, lte; timestamps take before, after, within_last, not_within_last; IP addresses take is_in_cidr, is_not_in_cidr; lists take contains_any_of, contains_all_of, is_empty, is_not_empty. Note that a missing attribute fails every operator except does_not_exist, including negative ones such as is_not.
-
-Optional:
-
-- `rows` (String) How the check treats a device that matches more than one record of an integration provider: "any" holds when any matching record passes, "all" only when every one does. Defaults to "any". Not valid for firezone attributes, which always describe exactly one device.
-- `value` (String) The value to compare against, written as a string whatever the attribute's type: "true" or "false" for a boolean, a number such as "40" or "0.5" for an integer or float (written in its shortest form, so "0.5" and not "0.50"), a version such as "14.4.1" for a version. For a timestamp, an ISO 8601 datetime with before and after, or an ISO 8601 duration such as "PT24H" with within_last and not_within_last. For matches and does_not_match, a regular expression. For firezone.last_seen_version, "@latest" means the newest Client release for the device's platform. Not allowed for the list operators or the operators that take no value.
-- `values` (List of String) The strings to compare against, for the list operators is_in, is_not_in, contains_any_of, contains_all_of (1-100 strings) and is_in_cidr, is_not_in_cidr (1-100 CIDRs). Not allowed for any other operator.
-
-
-<a id="nestedblock--posture--group--group--group--group--group--group--group--group--group"></a>
-### Nested Schema for `posture.group.group.group.group.group.group.group.group.group`
-
-Required:
-
-- `operator` (String) "and" holds when every check and group in this group holds; "or" when at least one does.
-
-Optional:
-
-- `check` (Block List) Compares one device attribute against a value. (see [below for nested schema](#nestedblock--posture--group--group--group--group--group--group--group--group--group--check))
-- `negate` (Boolean) Invert the group: it holds when the and/or would not. Counts for two levels of the API's nesting limit.
-
-<a id="nestedblock--posture--group--group--group--group--group--group--group--group--group--check"></a>
-### Nested Schema for `posture.group.group.group.group.group.group.group.group.group.check`
-
-Required:
-
-- `field` (String) The attribute to test, as "<provider>.<attribute>", for example "intune.compliance_state" or "firezone.last_seen_version". The provider is one of firezone (the connecting device itself), intune, iru, defender, santa, sentinelone or sophos. See the Firezone documentation for each provider's attributes.
-- `operator` (String) The comparison. Which operators apply depends on the attribute's type and the API rejects a mismatch. Every attribute takes exists and does_not_exist; strings take is, is_not, is_in, is_not_in, contains, does_not_contain, starts_with, ends_with, matches, does_not_match; booleans take is; integers and floats take eq, ne, gt, gte, lt, lte; versions take is, is_not, gt, gte, lt, lte; timestamps take before, after, within_last, not_within_last; IP addresses take is_in_cidr, is_not_in_cidr; lists take contains_any_of, contains_all_of, is_empty, is_not_empty. Note that a missing attribute fails every operator except does_not_exist, including negative ones such as is_not.
-
-Optional:
-
-- `rows` (String) How the check treats a device that matches more than one record of an integration provider: "any" holds when any matching record passes, "all" only when every one does. Defaults to "any". Not valid for firezone attributes, which always describe exactly one device.
-- `value` (String) The value to compare against, written as a string whatever the attribute's type: "true" or "false" for a boolean, a number such as "40" or "0.5" for an integer or float (written in its shortest form, so "0.5" and not "0.50"), a version such as "14.4.1" for a version. For a timestamp, an ISO 8601 datetime with before and after, or an ISO 8601 duration such as "PT24H" with within_last and not_within_last. For matches and does_not_match, a regular expression. For firezone.last_seen_version, "@latest" means the newest Client release for the device's platform. Not allowed for the list operators or the operators that take no value.
-- `values` (List of String) The strings to compare against, for the list operators is_in, is_not_in, contains_any_of, contains_all_of (1-100 strings) and is_in_cidr, is_not_in_cidr (1-100 CIDRs). Not allowed for any other operator.

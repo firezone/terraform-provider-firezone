@@ -202,7 +202,7 @@ func TestPolicyModelFromAPI_RequireAttestation(t *testing.T) {
 	}
 }
 
-// TestAccPolicyResource_Posture covers device posture blocks: create with a
+// TestAccPolicyResource_Posture covers device posture: create with a
 // nested expression, import, change a check, then remove the posture.
 // Needs an account with the device_posture entitlement.
 func TestAccPolicyResource_Posture(t *testing.T) {
@@ -213,13 +213,10 @@ func TestAccPolicyResource_Posture(t *testing.T) {
 			{
 				Config: testAccPolicyPostureConfig("compliant"),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("firezone_policy.test", "posture.0.operator", "and"),
-					resource.TestCheckResourceAttr("firezone_policy.test", "posture.0.negate", "false"),
-					resource.TestCheckResourceAttr("firezone_policy.test", "posture.0.check.0.field", "intune.enrolled"),
-					resource.TestCheckResourceAttr("firezone_policy.test", "posture.0.check.0.value", "true"),
-					resource.TestCheckResourceAttr("firezone_policy.test", "posture.0.group.0.operator", "or"),
-					resource.TestCheckResourceAttr("firezone_policy.test", "posture.0.group.0.check.0.values.0", "compliant"),
-					resource.TestCheckResourceAttr("firezone_policy.test", "posture.0.group.0.check.0.rows", "all"),
+					resource.TestCheckResourceAttr("firezone_policy.test", "posture.all.0.field", "intune.enrolled"),
+					resource.TestCheckResourceAttr("firezone_policy.test", "posture.all.0.is", "true"),
+					resource.TestCheckResourceAttr("firezone_policy.test", "posture.all.1.any.0.is_in.0", "compliant"),
+					resource.TestCheckResourceAttr("firezone_policy.test", "posture.all.1.any.0.rows", "all"),
 				),
 			},
 			{
@@ -230,13 +227,13 @@ func TestAccPolicyResource_Posture(t *testing.T) {
 			{
 				Config: testAccPolicyPostureConfig("inGracePeriod"),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("firezone_policy.test", "posture.0.group.0.check.0.values.0", "inGracePeriod"),
+					resource.TestCheckResourceAttr("firezone_policy.test", "posture.all.1.any.0.is_in.0", "inGracePeriod"),
 				),
 			},
 			{
 				Config: testAccPolicyResourceConfig("no posture", true),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckNoResourceAttr("firezone_policy.test", "posture.0.operator"),
+					resource.TestCheckNoResourceAttr("firezone_policy.test", "posture"),
 				),
 			},
 		},
@@ -264,31 +261,14 @@ resource "firezone_policy" "test" {
   group_id    = firezone_group.test.id
   resource_id = firezone_resource.test.id
 
-  posture {
-    operator = "and"
-
-    check {
-      field    = "intune.enrolled"
-      operator = "is"
-      value    = "true"
-    }
-
-    group {
-      operator = "or"
-
-      check {
-        field    = "intune.compliance_state"
-        operator = "is_in"
-        values   = ["` + complianceState + `"]
-        rows     = "all"
-      }
-
-      check {
-        field    = "firezone.last_seen_version"
-        operator = "gte"
-        value    = "@latest"
-      }
-    }
+  posture = {
+    all = [
+      { field = "intune.enrolled", is = true },
+      { any = [
+        { field = "intune.compliance_state", is_in = ["` + complianceState + `"], rows = "all" },
+        { field = "firezone.last_seen_version", gte = "@latest" },
+      ] },
+    ]
   }
 }
 `

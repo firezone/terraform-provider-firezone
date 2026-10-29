@@ -2,43 +2,49 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"regexp"
+	"maps"
+	"math/big"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 
-	"github.com/hashicorp/terraform-plugin-framework-validators/listvalidator"
-	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
-	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
+	"github.com/hashicorp/terraform-plugin-go/tftypes"
 
 	firezone "github.com/firezone/firezone-sdk-go"
 )
 
 // A device posture is a boolean expression the API stores as a tree of
-// and / or / not nodes over field checks. Terraform blocks cannot
-// recurse, but the API bounds the tree - Portal.Policies.Postures allows
-// 10 levels of and/or/not and 100 leaves - so the schema nests a single
-// "group" block that deep instead:
+// and / or / not nodes over field checks. Terraform schemas cannot
+// recurse, so the posture attribute is dynamic and the provider reads
+// the tree out of plain HCL values:
 //
-//	posture {                       # the root group
-//	  operator = "and"
-//	  check { field = "intune.enrolled" operator = "is" value = true }
-//	  group {
-//	    operator = "or"
-//	    check { ... }
-//	  }
+//	posture = {
+//	  all = [
+//	    { field = "intune.enrolled", is = true },
+//	    { any = [
+//	      { field = "intune.compliance_state", is_in = ["compliant"], rows = "all" },
+//	      { field = "firezone.last_seen_version", gte = "@latest" },
+//	    ] },
+//	    { not = { field = "sentinelone.infected", is = true } },
+//	  ]
 //	}
 //
-// A group is an and/or node, optionally wrapped in a not by negate. A
-// check is a leaf. Mirrors the limits in Portal.Policies.Postures; keep
-// in sync with the API.
+// An object with "all", "any" or "not" is an and, or or not node. An
+// object with "field" is a check: its one other key, besides an optional
+// "rows", names the API operator and holds its operand. Every API tree
+// has exactly one such spelling, which is what Read writes back, so an
+// imported posture reads as the config that would produce it.
+//
+// Limits mirror Portal.Policies.Postures; keep in sync with the API.
 const (
 	// postureMaxDepth is the deepest an and/or/not/leaf node may sit,
 	// counting the root as 0.
@@ -47,17 +53,19 @@ const (
 	postureMaxLeaves = 100
 	// postureMaxListItems is the most items a list operator's values may hold.
 	postureMaxListItems = 100
-	// postureGroupLevels is how many group blocks can nest. A group
-	// sits at depth 0-9, since its children sit one level deeper and
-	// the deepest permitted node is at depth 10.
-	postureGroupLevels = postureMaxDepth
+)
+
+// The keys of a posture object, other than the operator names.
+const (
+	postureKeyAll   = "all"
+	postureKeyAny   = "any"
+	postureKeyNot   = "not"
+	postureKeyField = "field"
+	postureKeyRows  = "rows"
 )
 
 var (
-	// postureFieldPattern is the "<provider>.<attribute>" shape of a
-	// check's field; the generated postureFieldKinds table decides which
-	// ones exist.
-	postureFieldPattern = regexp.MustCompile(`^(firezone|intune|iru|defender|santa|sentinelone|sophos)\.[a-z][a-z0-9_]*$`)
+	postureProviders = []string{"firezone", "intune", "iru", "defender", "santa", "sentinelone", "sophos"}
 
 	postureNoValueOperators = []string{"exists", "does_not_exist", "is_empty", "is_not_empty"}
 	postureListOperators    = []string{
@@ -106,141 +114,75 @@ var postureKindOperators = map[postureKind][]string{
 	postureKindStringArray: {"contains", "does_not_contain", "contains_any_of", "contains_all_of", "is_empty", "is_not_empty"},
 }
 
-// postureCheckAttrTypes are the attribute types of a check block.
-var postureCheckAttrTypes = map[string]attr.Type{
-	"field":    types.StringType,
-	"operator": types.StringType,
-	"value":    types.StringType,
-	"values":   types.ListType{ElemType: types.StringType},
-	"rows":     types.StringType,
+// postureOperatorsFor lists every operator kind takes, exists and
+// does_not_exist included.
+func postureOperatorsFor(kind postureKind) []string {
+	return append(slices.Clone(postureKindOperators[kind]), "exists", "does_not_exist")
 }
 
-// postureGroupAttrTypes returns the attribute types of a group block that
-// may still nest levels-1 further groups.
-func postureGroupAttrTypes(levels int) map[string]attr.Type {
-	attrTypes := map[string]attr.Type{
-		"operator": types.StringType,
-		"negate":   types.BoolType,
-		"check":    types.ListType{ElemType: types.ObjectType{AttrTypes: postureCheckAttrTypes}},
-	}
-	if levels > 1 {
-		attrTypes["group"] = types.ListType{ElemType: types.ObjectType{AttrTypes: postureGroupAttrTypes(levels - 1)}}
-	}
-	return attrTypes
-}
-
-// postureBlock is the schema of the policy's posture block.
-func postureBlock() schema.ListNestedBlock {
-	block := postureGroupBlock(postureGroupLevels)
-	block.Description = "Device posture requirements: checks the connecting device must pass, in " +
-		"addition to every condition, before this Policy grants access. The block is the root " +
-		"group of an and/or expression; nest group blocks for deeper logic. Needs the account's " +
-		"device_posture entitlement. Changing it revokes the Policy's active authorizations, so " +
-		"affected connections reauthorize.\n\n" +
-		"The API allows at most 10 levels of nesting (a negated group counts for two) and 100 checks."
-	block.Validators = append(block.Validators, listvalidator.SizeAtMost(1))
-	return block
-}
-
-// postureGroupBlock builds a group block that may nest levels-1 further
-// groups beneath it.
-func postureGroupBlock(levels int) schema.ListNestedBlock {
-	blocks := map[string]schema.Block{
-		"check": schema.ListNestedBlock{
-			Description: "Compares one device attribute against a value.",
-			NestedObject: schema.NestedBlockObject{
-				Attributes: map[string]schema.Attribute{
-					"field": schema.StringAttribute{
-						Required: true,
-						Description: "The attribute to test, as \"<provider>.<attribute>\", for example " +
-							"\"intune.compliance_state\" or \"firezone.last_seen_version\". The provider is one of " +
-							"firezone (the connecting device itself), intune, iru, defender, santa, sentinelone " +
-							"or sophos. See the Firezone documentation for each provider's attributes.",
-						Validators: []validator.String{
-							stringvalidator.RegexMatches(postureFieldPattern,
-								"must be \"<provider>.<attribute>\" with a provider of firezone, intune, iru, defender, santa, sentinelone or sophos"),
-						},
-					},
-					"operator": schema.StringAttribute{
-						Required: true,
-						Description: "The comparison. Which operators apply depends on the attribute's type " +
-							"and the API rejects a mismatch. Every attribute takes exists and does_not_exist; " +
-							"strings take is, is_not, is_in, is_not_in, contains, does_not_contain, starts_with, " +
-							"ends_with, matches, does_not_match; booleans take is; integers and floats take eq, ne, " +
-							"gt, gte, lt, lte; versions take is, is_not, gt, gte, lt, lte; timestamps take before, " +
-							"after, within_last, not_within_last; IP addresses take is_in_cidr, is_not_in_cidr; " +
-							"lists take contains_any_of, contains_all_of, is_empty, is_not_empty. " +
-							"Note that a missing attribute fails every operator except does_not_exist, including " +
-							"negative ones such as is_not.",
-						Validators: []validator.String{
-							stringvalidator.OneOf(slices.Concat(postureNoValueOperators, postureListOperators, postureScalarOperators)...),
-						},
-					},
-					"value": schema.StringAttribute{
-						Optional: true,
-						Description: "The value to compare against, written as a string whatever the attribute's " +
-							"type: \"true\" or \"false\" for a boolean, a number such as \"40\" or \"0.5\" for an " +
-							"integer or float (written in its shortest form, so \"0.5\" and not \"0.50\"), a " +
-							"version such as \"14.4.1\" for a version. For a timestamp, an ISO 8601 datetime with " +
-							"before and after, or an ISO 8601 duration such as \"PT24H\" with within_last and " +
-							"not_within_last. For matches and does_not_match, a regular expression. For " +
-							"firezone.last_seen_version, \"@latest\" means the newest Client release for the device's " +
-							"platform. Not allowed for the list operators or the operators that take no value.",
-					},
-					"values": schema.ListAttribute{
-						Optional:    true,
-						ElementType: types.StringType,
-						Description: "The strings to compare against, for the list operators is_in, is_not_in, " +
-							"contains_any_of, contains_all_of (1-100 strings) and is_in_cidr, is_not_in_cidr " +
-							"(1-100 CIDRs). Not allowed for any other operator.",
-					},
-					"rows": schema.StringAttribute{
-						Optional: true,
-						Computed: true,
-						Default:  stringdefault.StaticString("any"),
-						Description: "How the check treats a device that matches more than one record of an " +
-							"integration provider: \"any\" holds when any matching record passes, \"all\" only " +
-							"when every one does. Defaults to \"any\". Not valid for firezone attributes, " +
-							"which always describe exactly one device.",
-						Validators: []validator.String{stringvalidator.OneOf("any", "all")},
-					},
-				},
-			},
-		},
-	}
-	if levels > 1 {
-		blocks["group"] = postureGroupBlock(levels - 1)
-		nested := blocks["group"].(schema.ListNestedBlock)
-		nested.Description = "A nested group of checks, combined with the enclosing group's operator " +
-			"like any other check."
-		blocks["group"] = nested
-	}
-
-	return schema.ListNestedBlock{
-		NestedObject: schema.NestedBlockObject{
-			Attributes: map[string]schema.Attribute{
-				"operator": schema.StringAttribute{
-					Required: true,
-					Description: "\"and\" holds when every check and group in this group holds; \"or\" " +
-						"when at least one does.",
-					Validators: []validator.String{stringvalidator.OneOf("and", "or")},
-				},
-				"negate": schema.BoolAttribute{
-					Optional: true,
-					Computed: true,
-					Default:  booldefault.StaticBool(false),
-					Description: "Invert the group: it holds when the and/or would not. Counts for two " +
-						"levels of the API's nesting limit.",
-				},
-			},
-			Blocks: blocks,
-		},
+// postureAttribute is the schema of the policy's posture attribute.
+func postureAttribute() schema.DynamicAttribute {
+	return schema.DynamicAttribute{
+		Optional:   true,
+		CustomType: postureType{},
+		Description: "Device posture requirements: checks the connecting device must pass, in addition to every " +
+			"condition, before this Policy grants access. Needs the account's device_posture entitlement. " +
+			"Changing it revokes the Policy's active authorizations, so affected connections reauthorize.\n\n" +
+			"The value is an expression built from HCL objects. Each object is exactly one of:\n\n" +
+			"- `{ all = [ ... ] }`: holds when every item holds.\n" +
+			"- `{ any = [ ... ] }`: holds when at least one item holds.\n" +
+			"- `{ not = { ... } }`: holds when its item does not.\n" +
+			"- `{ field = \"<provider>.<attribute>\", <operator> = <value> }`: a check of one device attribute. " +
+			"The provider is firezone (the connecting device itself), intune, iru, defender, santa, sentinelone " +
+			"or sophos. A check may also set `rows = \"all\"`, so that it holds only when every record the " +
+			"integration provider has for the device passes; the default, `\"any\"`, needs one. rows does not " +
+			"apply to firezone attributes.\n\n" +
+			"The value's type follows the attribute's: `true` or `false` for a boolean, a number for an integer " +
+			"or float, a string for a string, version or timestamp, and a list of strings for the list " +
+			"operators. Operators by attribute type:\n\n" +
+			"- boolean: `is`\n" +
+			"- string: `is`, `is_not`, `contains`, `does_not_contain`, `starts_with`, `ends_with`, " +
+			"`matches`, `does_not_match` (regular expressions), `is_in`, `is_not_in` (lists). Comparison ignores case.\n" +
+			"- integer, float: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`\n" +
+			"- version: `is`, `is_not`, `gt`, `gte`, `lt`, `lte`, with a dotted version such as `\"14.4.1\"`. " +
+			"For firezone.last_seen_version, `\"@latest\"` means the newest Client release for the device's platform.\n" +
+			"- timestamp: `before`, `after` with an ISO 8601 datetime; `within_last`, `not_within_last` with an " +
+			"ISO 8601 duration such as `\"PT24H\"` or `\"P30D\"`\n" +
+			"- IP address: `is_in_cidr`, `is_not_in_cidr`, with a list of CIDRs\n" +
+			"- string list: `contains`, `does_not_contain` with a string; `contains_any_of`, `contains_all_of` " +
+			"with a list; `is_empty`, `is_not_empty`\n" +
+			"- JSON: `is_empty`, `is_not_empty`\n" +
+			"- every attribute: `exists`, `does_not_exist`\n\n" +
+			"Operators that take no value are written `= true`, for example `{ field = \"iru.serial_number\", " +
+			"exists = true }`. A missing attribute fails every operator except does_not_exist, including " +
+			"negative ones such as is_not.\n\n" +
+			"The API allows at most 10 levels of all/any/not above a check and 100 checks. Importing a Policy " +
+			"reads its posture back in this form.",
 	}
 }
 
-// postureBuilder converts the posture block into an SDK expression,
+// postureFromValue converts a posture value to the SDK's expression. The
+// node is nil when the value is null or not yet fully known, or when
+// diagnostics were added.
+func postureFromValue(v postureValue) (*firezone.PostureNode, fwDiagnostics) {
+	if v.IsNull() || v.IsUnknown() {
+		return nil, nil
+	}
+	p := &postureParser{}
+	root, ok := p.node(v.DynamicValue, "posture", 0)
+	if p.leaves > postureMaxLeaves && !p.incomplete {
+		p.errorf("posture", "Too Many Posture Checks",
+			"a Policy allows at most %d checks across its posture; this one has %d.", postureMaxLeaves, p.leaves)
+	}
+	if !ok || p.diags.HasError() || p.incomplete {
+		return nil, p.diags
+	}
+	return &root, p.diags
+}
+
+// postureParser converts a posture value into an SDK expression,
 // reporting every problem it can see at plan time.
-type postureBuilder struct {
+type postureParser struct {
 	diags  fwDiagnostics
 	leaves int
 	// tooDeep stops the depth error repeating for every node below the
@@ -251,213 +193,551 @@ type postureBuilder struct {
 	incomplete bool
 }
 
-// postureFromList converts a posture block to the SDK's expression. The
-// node is nil when the block is absent or not yet fully known, or when
-// diagnostics were added.
-func postureFromList(list types.List) (node *firezone.PostureNode, diags fwDiagnostics) {
-	if list.IsNull() || list.IsUnknown() || len(list.Elements()) == 0 {
-		return nil, nil
-	}
-
-	b := &postureBuilder{}
-	root, ok := b.group(list.Elements()[0], path.Root("posture").AtListIndex(0), 0)
-	if b.leaves > postureMaxLeaves && !b.incomplete {
-		b.diags.AddAttributeError(path.Root("posture"), "Too Many Posture Checks",
-			fmt.Sprintf("a Policy allows at most %d checks across its posture; this one has %d.",
-				postureMaxLeaves, b.leaves))
-	}
-	if !ok || b.diags.HasError() || b.incomplete {
-		return nil, b.diags
-	}
-	return &root, b.diags
+// errorf reports a problem at loc, a readable path such as
+// "posture.all[1].not". Terraform cannot point inside a dynamic value, so
+// the diagnostic names the attribute and the detail names the spot.
+func (p *postureParser) errorf(loc, summary, format string, args ...any) {
+	p.diags.AddAttributeError(path.Root("posture"), summary, loc+": "+fmt.Sprintf(format, args...))
 }
 
-// group converts one group object. depth is the API depth of the node
-// the group becomes.
-func (b *postureBuilder) group(elem attr.Value, at path.Path, depth int) (firezone.PostureNode, bool) {
-	obj, ok := elem.(types.Object)
-	if !ok || obj.IsNull() || obj.IsUnknown() {
-		b.incomplete = true
-		return firezone.PostureNode{}, false
-	}
-	attrs := obj.Attributes()
-
-	operator, _ := attrs["operator"].(types.String)
-	negate, _ := attrs["negate"].(types.Bool)
-	if operator.IsUnknown() || operator.IsNull() || negate.IsUnknown() {
-		b.incomplete = true
-	}
-
-	// A negated group is a not around its and/or, one level deeper.
-	innerDepth := depth
-	if negate.ValueBool() {
-		innerDepth++
-	}
-	b.checkDepth(innerDepth, at)
-
-	var children []firezone.PostureNode
-	if checks, ok := attrs["check"].(types.List); ok {
-		if checks.IsUnknown() {
-			b.incomplete = true
+// known unwraps v to the concrete value underneath any dynamic wrapper.
+// It returns false, marking the parse incomplete, when v is unknown, and
+// nil when it is null.
+func (p *postureParser) known(v attr.Value) (attr.Value, bool) {
+	for {
+		if v == nil || v.IsNull() {
+			return nil, true
 		}
-		for i, c := range checks.Elements() {
-			b.checkDepth(innerDepth+1, at.AtName("check").AtListIndex(i))
-			if child, ok := b.check(c, at.AtName("check").AtListIndex(i)); ok {
-				children = append(children, child)
-			}
+		if v.IsUnknown() {
+			p.incomplete = true
+			return nil, false
 		}
-	}
-	if groups, ok := attrs["group"].(types.List); ok {
-		if groups.IsUnknown() {
-			b.incomplete = true
+		d, ok := v.(basetypes.DynamicValue)
+		if !ok {
+			return v, true
 		}
-		for i, g := range groups.Elements() {
-			if child, ok := b.group(g, at.AtName("group").AtListIndex(i), innerDepth+1); ok {
-				children = append(children, child)
-			}
-		}
+		v = d.UnderlyingValue()
 	}
-
-	if len(children) == 0 {
-		if !b.incomplete {
-			b.diags.AddAttributeError(at, "Empty Posture Group",
-				"a group needs at least one check or group block.")
-		}
-		return firezone.PostureNode{}, false
-	}
-	if operator.IsUnknown() || operator.IsNull() || negate.IsUnknown() {
-		return firezone.PostureNode{}, false
-	}
-
-	var node firezone.PostureNode
-	if operator.ValueString() == "or" {
-		node = firezone.PostureOr(children...)
-	} else {
-		node = firezone.PostureAnd(children...)
-	}
-	if negate.ValueBool() {
-		node = firezone.PostureNot(node)
-	}
-	return node, true
 }
 
-// checkDepth reports a node deeper than the API allows, once.
-func (b *postureBuilder) checkDepth(depth int, at path.Path) {
-	if depth <= postureMaxDepth || b.tooDeep {
-		return
-	}
-	b.tooDeep = true
-	b.diags.AddAttributeError(at, "Posture Nested Too Deeply",
-		fmt.Sprintf("the API allows at most %d levels of and/or/not above a check. A negated group "+
-			"counts for two levels. Flatten the expression.", postureMaxDepth))
-}
-
-// check converts one check object and validates its operator/value pairing.
-func (b *postureBuilder) check(elem attr.Value, at path.Path) (firezone.PostureNode, bool) {
-	b.leaves++
-
-	obj, ok := elem.(types.Object)
-	if !ok || obj.IsNull() || obj.IsUnknown() {
-		b.incomplete = true
+// node converts one posture object. depth is the API depth of the node
+// it becomes.
+func (p *postureParser) node(v attr.Value, loc string, depth int) (firezone.PostureNode, bool) {
+	v, ok := p.known(v)
+	if !ok {
 		return firezone.PostureNode{}, false
 	}
-	attrs := obj.Attributes()
+	keys, isObject := postureObject(v)
+	if !isObject {
+		p.errorf(loc, "Invalid Posture", "expected an object such as { all = [...] } or "+
+			"{ field = \"intune.enrolled\", is = true }; got %s.", postureDescribe(v))
+		return firezone.PostureNode{}, false
+	}
+	if depth > postureMaxDepth && !p.tooDeep {
+		p.tooDeep = true
+		p.errorf(loc, "Posture Nested Too Deeply",
+			"the API allows at most %d levels of all/any/not above a check. Flatten the expression.", postureMaxDepth)
+	}
 
-	field, _ := attrs["field"].(types.String)
-	operator, _ := attrs["operator"].(types.String)
-	value, _ := attrs["value"].(types.String)
-	values, _ := attrs["values"].(types.List)
-	rows, _ := attrs["rows"].(types.String)
+	if _, isCheck := keys[postureKeyField]; isCheck {
+		return p.check(keys, loc)
+	}
 
-	if field.IsUnknown() || operator.IsUnknown() || value.IsUnknown() || values.IsUnknown() || rows.IsUnknown() ||
-		field.IsNull() || operator.IsNull() {
-		b.incomplete = true
+	names := slices.Sorted(maps.Keys(keys))
+	if len(names) != 1 || !slices.Contains([]string{postureKeyAll, postureKeyAny, postureKeyNot}, names[0]) {
+		p.errorf(loc, "Invalid Posture",
+			"an object needs exactly one of all, any or not, or a field for a check; got %s.", postureKeyList(names))
 		return firezone.PostureNode{}, false
 	}
 
-	if rows.ValueString() == "all" && strings.HasPrefix(field.ValueString(), "firezone.") {
-		b.diags.AddAttributeError(at.AtName("rows"), "Invalid Posture Check",
-			fmt.Sprintf("rows does not apply to %q, which describes exactly one device.", field.ValueString()))
-	}
-
-	op := operator.ValueString()
-	kind, known := postureFieldKinds[field.ValueString()]
-	if !known {
-		b.diags.AddAttributeError(at.AtName("field"), "Unknown Posture Field",
-			fmt.Sprintf("%q is not a device posture field. Fields are \"<provider>.<attribute>\", such as "+
-				"\"intune.compliance_state\"; a field newer than this provider needs a provider upgrade.", field.ValueString()))
-		return firezone.PostureNode{}, false
-	}
-	if !slices.Contains(postureKindOperators[kind], op) && op != "exists" && op != "does_not_exist" {
-		valid := append(slices.Clone(postureKindOperators[kind]), "exists", "does_not_exist")
-		b.diags.AddAttributeError(at.AtName("operator"), "Invalid Posture Check",
-			fmt.Sprintf("operator %q does not apply to %s field %q. Valid operators: %s.",
-				op, kind, field.ValueString(), strings.Join(valid, ", ")))
-	}
-
-	hasValue := !value.IsNull()
-	hasValues := !values.IsNull()
-
-	var wire any
-	switch {
-	case slices.Contains(postureNoValueOperators, op):
-		if hasValue || hasValues {
-			b.diags.AddAttributeError(at.AtName("operator"), "Invalid Posture Check",
-				fmt.Sprintf("operator %q takes no value; remove value and values.", op))
+	switch key := names[0]; key {
+	case postureKeyNot:
+		child, ok := p.node(keys[key], loc+".not", depth+1)
+		if !ok {
+			return firezone.PostureNode{}, false
 		}
-	case slices.Contains(postureListOperators, op):
-		if hasValue {
-			b.diags.AddAttributeError(at.AtName("value"), "Invalid Posture Check",
-				fmt.Sprintf("operator %q takes a list; use values instead of value.", op))
-		}
-		if !hasValues {
-			b.diags.AddAttributeError(at.AtName("operator"), "Invalid Posture Check",
-				fmt.Sprintf("operator %q needs values.", op))
-			break
-		}
-		items := make([]string, 0, len(values.Elements()))
-		for _, e := range values.Elements() {
-			s, ok := e.(types.String)
-			if !ok || s.IsUnknown() || s.IsNull() {
-				b.incomplete = true
-				continue
-			}
-			items = append(items, s.ValueString())
-		}
-		if n := len(values.Elements()); n == 0 || n > postureMaxListItems {
-			b.diags.AddAttributeError(at.AtName("values"), "Invalid Posture Check",
-				fmt.Sprintf("values must hold 1 to %d items; got %d.", postureMaxListItems, n))
-		}
-		wire = items
+		return firezone.PostureNot(child), true
 	default:
-		if hasValues {
-			b.diags.AddAttributeError(at.AtName("values"), "Invalid Posture Check",
-				fmt.Sprintf("operator %q takes a single value; use value instead of values.", op))
+		items, ok := p.list(keys[key], loc+"."+key)
+		if !ok {
+			return firezone.PostureNode{}, false
 		}
-		if !hasValue {
-			b.diags.AddAttributeError(at.AtName("operator"), "Invalid Posture Check",
-				fmt.Sprintf("operator %q needs a value.", op))
-			break
+		if len(items) == 0 {
+			p.errorf(loc+"."+key, "Invalid Posture", "needs at least one item.")
+			return firezone.PostureNode{}, false
 		}
-		scalar, err := postureScalar(kind, value.ValueString())
-		if err != nil {
-			b.diags.AddAttributeError(at.AtName("value"), "Invalid Posture Check", err.Error())
-			break
+		children := make([]firezone.PostureNode, 0, len(items))
+		valid := true
+		for i, item := range items {
+			child, ok := p.node(item, fmt.Sprintf("%s.%s[%d]", loc, key, i), depth+1)
+			valid = valid && ok
+			children = append(children, child)
 		}
-		wire = scalar
+		if !valid {
+			return firezone.PostureNode{}, false
+		}
+		if key == postureKeyAny {
+			return firezone.PostureOr(children...), true
+		}
+		return firezone.PostureAnd(children...), true
+	}
+}
+
+// check converts the keys of one check object and validates its
+// operator and value against the field's type.
+func (p *postureParser) check(keys map[string]attr.Value, loc string) (firezone.PostureNode, bool) {
+	p.leaves++
+
+	field, ok := p.string(keys[postureKeyField], loc+".field")
+	if !ok {
+		return firezone.PostureNode{}, false
+	}
+	kind, known := postureFieldKinds[field]
+	if !known {
+		p.errorf(loc+".field", "Unknown Posture Field",
+			"%q is not a device posture field. Fields are \"<provider>.<attribute>\" with a provider of %s, "+
+				"such as \"intune.compliance_state\"; a field newer than this provider needs a provider upgrade.",
+			field, strings.Join(postureProviders, ", "))
+		return firezone.PostureNode{}, false
 	}
 
-	node := firezone.PostureCheck(field.ValueString(), firezone.PostureOperator(op), wire)
-	if rows.ValueString() == "all" {
+	var rows string
+	if raw, set := keys[postureKeyRows]; set {
+		if rows, ok = p.string(raw, loc+".rows"); !ok {
+			return firezone.PostureNode{}, false
+		}
+		switch {
+		case rows != "any" && rows != "all":
+			p.errorf(loc+".rows", "Invalid Posture Check", "must be \"any\" or \"all\"; got %q.", rows)
+		case rows == "all" && strings.HasPrefix(field, "firezone."):
+			p.errorf(loc+".rows", "Invalid Posture Check",
+				"rows does not apply to %q, which describes exactly one device.", field)
+		}
+	}
+
+	var ops []string
+	for key := range keys {
+		if key != postureKeyField && key != postureKeyRows {
+			ops = append(ops, key)
+		}
+	}
+	sort.Strings(ops)
+	valid := postureOperatorsFor(kind)
+	if len(ops) != 1 {
+		p.errorf(loc, "Invalid Posture Check",
+			"a check needs exactly one operator besides field and rows; got %s. Operators for %s field %q: %s.",
+			postureKeyList(ops), kind, field, strings.Join(valid, ", "))
+		return firezone.PostureNode{}, false
+	}
+	op := ops[0]
+	if !slices.Contains(valid, op) {
+		p.errorf(loc+"."+op, "Invalid Posture Check",
+			"%q is not an operator for %s field %q. Valid operators: %s.", op, kind, field, strings.Join(valid, ", "))
+		return firezone.PostureNode{}, false
+	}
+
+	value, ok := p.operand(kind, op, keys[op], loc+"."+op)
+	if !ok {
+		return firezone.PostureNode{}, false
+	}
+	node := firezone.PostureCheck(field, firezone.PostureOperator(op), value)
+	if rows == "all" {
 		node = node.WithRows(firezone.PostureRowsAll)
 	}
 	return node, true
 }
 
-// postureScalar converts a check's string value to the JSON scalar the
-// API takes for kind. Numbers and booleans must be written in their
-// canonical form, as that is how they read back and a different spelling
-// of the same value would show as a change on every plan.
+// operand converts an operator's value to the JSON the API takes for it.
+func (p *postureParser) operand(kind postureKind, op string, raw attr.Value, loc string) (any, bool) {
+	v, ok := p.known(raw)
+	if !ok {
+		return nil, false
+	}
+
+	switch {
+	case slices.Contains(postureNoValueOperators, op):
+		if b, isBool := v.(types.Bool); !isBool || !b.ValueBool() {
+			p.errorf(loc, "Invalid Posture Check", "%s takes no value; write %s = true.", op, op)
+			return nil, false
+		}
+		return nil, true
+
+	case slices.Contains(postureListOperators, op):
+		items, ok := p.list(v, loc)
+		if !ok {
+			return nil, false
+		}
+		if n := len(items); n == 0 || n > postureMaxListItems {
+			p.errorf(loc, "Invalid Posture Check", "%s takes a list of 1 to %d strings; got %d.", op, postureMaxListItems, n)
+			return nil, false
+		}
+		values := make([]string, 0, len(items))
+		valid := true
+		for i, item := range items {
+			s, ok := p.string(item, fmt.Sprintf("%s[%d]", loc, i))
+			valid = valid && ok
+			values = append(values, s)
+		}
+		return values, valid
+	}
+
+	switch kind {
+	case postureKindBool:
+		if b, isBool := v.(types.Bool); isBool {
+			return b.ValueBool(), true
+		}
+		p.errorf(loc, "Invalid Posture Check", "expected true or false for a boolean field; got %s.%s",
+			postureDescribe(v), postureUnquoteHint(v))
+	case postureKindInteger:
+		if n, isNumber := v.(types.Number); isNumber {
+			if i, accuracy := n.ValueBigFloat().Int64(); accuracy == big.Exact {
+				return i, true
+			}
+		}
+		p.errorf(loc, "Invalid Posture Check", "expected a whole number for an integer field; got %s.%s",
+			postureDescribe(v), postureUnquoteHint(v))
+	case postureKindFloat:
+		if n, isNumber := v.(types.Number); isNumber {
+			f, _ := n.ValueBigFloat().Float64()
+			return f, true
+		}
+		p.errorf(loc, "Invalid Posture Check", "expected a number for a float field; got %s.%s",
+			postureDescribe(v), postureUnquoteHint(v))
+	default:
+		if _, isString := v.(types.String); isString {
+			return p.string(v, loc)
+		}
+		hint := ""
+		if kind == postureKindVersion {
+			hint = " Quote versions, for example \"14.4\", so that 14.4 and 14.40 stay different."
+		}
+		p.errorf(loc, "Invalid Posture Check", "%s takes a string for a %s field; got %s.%s",
+			op, kind, postureDescribe(v), hint)
+	}
+	return nil, false
+}
+
+// string reads a known string.
+func (p *postureParser) string(raw attr.Value, loc string) (string, bool) {
+	v, ok := p.known(raw)
+	if !ok {
+		return "", false
+	}
+	s, isString := v.(types.String)
+	if !isString {
+		p.errorf(loc, "Invalid Posture", "expected a string; got %s.", postureDescribe(v))
+		return "", false
+	}
+	return s.ValueString(), true
+}
+
+// list reads the items of a known list or tuple. Sets are refused: their
+// order is not the config's, so they could not read back as written.
+func (p *postureParser) list(raw attr.Value, loc string) ([]attr.Value, bool) {
+	v, ok := p.known(raw)
+	if !ok {
+		return nil, false
+	}
+	switch l := v.(type) {
+	case types.Tuple:
+		return l.Elements(), true
+	case types.List:
+		return l.Elements(), true
+	}
+	p.errorf(loc, "Invalid Posture", "expected a list such as [ ... ]; got %s.", postureDescribe(v))
+	return nil, false
+}
+
+// postureObject returns the keys of an object or map whose values are
+// not null. A null key counts as absent, so a config can write
+// rows = var.strict ? "all" : null.
+func postureObject(v attr.Value) (map[string]attr.Value, bool) {
+	var all map[string]attr.Value
+	switch o := v.(type) {
+	case types.Object:
+		all = o.Attributes()
+	case types.Map:
+		all = o.Elements()
+	default:
+		return nil, false
+	}
+	keys := make(map[string]attr.Value, len(all))
+	for k, e := range all {
+		if !e.IsNull() {
+			keys[k] = e
+		}
+	}
+	return keys, true
+}
+
+// postureDescribe names the kind of value v is, for error messages.
+func postureDescribe(v attr.Value) string {
+	switch t := v.(type) {
+	case nil:
+		return "null"
+	case types.String:
+		return strconv.Quote(t.ValueString())
+	case types.Bool:
+		return strconv.FormatBool(t.ValueBool())
+	case types.Number:
+		return t.ValueBigFloat().Text('g', -1)
+	case types.Tuple, types.List:
+		return "a list"
+	case types.Set:
+		return "a set (convert it with tolist())"
+	case types.Object, types.Map:
+		return "an object"
+	}
+	return v.String()
+}
+
+// postureUnquoteHint suggests dropping the quotes from a string that
+// reads as a boolean or number, the form posture checks took before
+// values were typed.
+func postureUnquoteHint(v attr.Value) string {
+	s, ok := v.(types.String)
+	if !ok {
+		return ""
+	}
+	if _, err := strconv.ParseFloat(s.ValueString(), 64); err == nil || s.ValueString() == "true" || s.ValueString() == "false" {
+		return fmt.Sprintf(" Write %s without quotes.", s.ValueString())
+	}
+	return ""
+}
+
+func postureKeyList(keys []string) string {
+	if len(keys) == 0 {
+		return "none"
+	}
+	return strings.Join(keys, ", ")
+}
+
+// postureToValue converts an SDK expression to its posture value: the
+// one spelling of that tree, which is what an import reads back. A nil
+// expression is null.
+func postureToValue(node *firezone.PostureNode) (postureValue, error) {
+	if node == nil {
+		return postureValue{DynamicValue: types.DynamicNull()}, nil
+	}
+	v, err := postureNodeValue(*node)
+	if err != nil {
+		return postureValue{DynamicValue: types.DynamicNull()}, err
+	}
+	return postureValue{DynamicValue: types.DynamicValue(v)}, nil
+}
+
+func postureNodeValue(node firezone.PostureNode) (attr.Value, error) {
+	switch {
+	case node.Not != nil:
+		child, err := postureNodeValue(*node.Not)
+		if err != nil {
+			return nil, err
+		}
+		return postureObjectValue(map[string]attr.Value{postureKeyNot: child})
+	case node.And != nil, node.Or != nil:
+		key, children := postureKeyAll, node.And
+		if node.Or != nil {
+			key, children = postureKeyAny, node.Or
+		}
+		items := make([]attr.Value, 0, len(children))
+		for _, child := range children {
+			item, err := postureNodeValue(child)
+			if err != nil {
+				return nil, err
+			}
+			items = append(items, item)
+		}
+		list, err := postureTupleValue(items)
+		if err != nil {
+			return nil, err
+		}
+		return postureObjectValue(map[string]attr.Value{key: list})
+	}
+
+	operand, err := postureOperandValue(node.Value)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", node.Field, err)
+	}
+	attrs := map[string]attr.Value{
+		postureKeyField:       types.StringValue(node.Field),
+		string(node.Operator): operand,
+	}
+	if node.Rows == firezone.PostureRowsAll {
+		attrs[postureKeyRows] = types.StringValue(string(firezone.PostureRowsAll))
+	}
+	return postureObjectValue(attrs)
+}
+
+// postureOperandValue converts a check's value as the API returns it -
+// numbers as float64 and lists as []any - to the HCL value a config
+// writes for it.
+func postureOperandValue(value any) (attr.Value, error) {
+	switch v := value.(type) {
+	case nil:
+		return types.BoolValue(true), nil
+	case string:
+		return types.StringValue(v), nil
+	case bool:
+		return types.BoolValue(v), nil
+	case float64:
+		return types.NumberValue(big.NewFloat(v)), nil
+	case int64:
+		return types.NumberValue(new(big.Float).SetInt64(v)), nil
+	case []string:
+		items := make([]attr.Value, 0, len(v))
+		for _, s := range v {
+			items = append(items, types.StringValue(s))
+		}
+		return postureTupleValue(items)
+	case []any:
+		items := make([]attr.Value, 0, len(v))
+		for _, item := range v {
+			s, ok := item.(string)
+			if !ok {
+				return nil, fmt.Errorf("a list holds a %T, not a string", item)
+			}
+			items = append(items, types.StringValue(s))
+		}
+		return postureTupleValue(items)
+	}
+	return nil, fmt.Errorf("unexpected value of type %T", value)
+}
+
+// postureObjectValue and postureTupleValue build the object and tuple
+// types an HCL literal has, rather than a map or list, so that a value
+// read back has the type the same config would.
+func postureObjectValue(attrs map[string]attr.Value) (attr.Value, error) {
+	attrTypes := make(map[string]attr.Type, len(attrs))
+	for k, v := range attrs {
+		attrTypes[k] = v.Type(context.Background())
+	}
+	obj, diags := types.ObjectValue(attrTypes, attrs)
+	if diags.HasError() {
+		return nil, fmt.Errorf("building an object: %s", diags[0].Detail())
+	}
+	return obj, nil
+}
+
+func postureTupleValue(items []attr.Value) (attr.Value, error) {
+	elemTypes := make([]attr.Type, 0, len(items))
+	for _, item := range items {
+		elemTypes = append(elemTypes, item.Type(context.Background()))
+	}
+	tuple, diags := types.TupleValue(elemTypes, items)
+	if diags.HasError() {
+		return nil, fmt.Errorf("building a list: %s", diags[0].Detail())
+	}
+	return tuple, nil
+}
+
+// postureEqual reports whether two posture values are the same
+// expression, however each is spelled: a list or a tuple, rows = "any"
+// or no rows, 40 or 40.0. Both must be complete and valid.
+func postureEqual(a, b postureValue) bool {
+	if a.IsNull() || b.IsNull() {
+		return a.IsNull() && b.IsNull()
+	}
+	nodeA, diagsA := postureFromValue(a)
+	nodeB, diagsB := postureFromValue(b)
+	if nodeA == nil || nodeB == nil || diagsA.HasError() || diagsB.HasError() {
+		return false
+	}
+	return postureCanonicalJSON(*nodeA) == postureCanonicalJSON(*nodeB)
+}
+
+// postureCanonicalJSON is the wire form of node with every rows = "any"
+// dropped, since the API reads an absent rows as "any".
+func postureCanonicalJSON(node firezone.PostureNode) string {
+	b, err := json.Marshal(postureDropAnyRows(node))
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+func postureDropAnyRows(node firezone.PostureNode) firezone.PostureNode {
+	if node.Rows == firezone.PostureRowsAny {
+		node.Rows = ""
+	}
+	if node.Not != nil {
+		child := postureDropAnyRows(*node.Not)
+		node.Not = &child
+	}
+	for _, children := range []*[]firezone.PostureNode{&node.And, &node.Or} {
+		if *children == nil {
+			continue
+		}
+		mapped := make([]firezone.PostureNode, 0, len(*children))
+		for _, child := range *children {
+			mapped = append(mapped, postureDropAnyRows(child))
+		}
+		*children = mapped
+	}
+	return node
+}
+
+var (
+	_ basetypes.DynamicTypable                    = postureType{}
+	_ basetypes.DynamicValuableWithSemanticEquals = postureValue{}
+)
+
+// postureType is the dynamic type of the posture attribute. Its values
+// compare by the expression they describe, so a config spelled
+// differently from what Read returns - [...] for a list, rows = "any",
+// 40.0 for 40 - is not reported as drift.
+type postureType struct {
+	basetypes.DynamicType
+}
+
+func (t postureType) Equal(o attr.Type) bool {
+	_, ok := o.(postureType)
+	return ok
+}
+
+func (t postureType) String() string { return "postureType" }
+
+func (t postureType) ValueFromDynamic(_ context.Context, in basetypes.DynamicValue) (basetypes.DynamicValuable, diag.Diagnostics) {
+	return postureValue{DynamicValue: in}, nil
+}
+
+func (t postureType) ValueFromTerraform(ctx context.Context, in tftypes.Value) (attr.Value, error) {
+	v, err := t.DynamicType.ValueFromTerraform(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	d, ok := v.(basetypes.DynamicValue)
+	if !ok {
+		return nil, fmt.Errorf("unexpected value type %T", v)
+	}
+	return postureValue{DynamicValue: d}, nil
+}
+
+func (t postureType) ValueType(context.Context) attr.Value { return postureValue{} }
+
+// postureValue is a posture attribute value.
+type postureValue struct {
+	basetypes.DynamicValue
+}
+
+func (v postureValue) Equal(o attr.Value) bool {
+	other, ok := o.(postureValue)
+	return ok && v.DynamicValue.Equal(other.DynamicValue)
+}
+
+func (v postureValue) Type(context.Context) attr.Type { return postureType{} }
+
+// DynamicSemanticEquals lets the framework keep the config's spelling of
+// a posture when the API returns the same expression in its own.
+func (v postureValue) DynamicSemanticEquals(ctx context.Context, prior basetypes.DynamicValuable) (bool, diag.Diagnostics) {
+	other, diags := prior.ToDynamicValue(ctx)
+	if diags.HasError() {
+		return false, diags
+	}
+	return postureEqual(v, postureValue{DynamicValue: other}), nil
+}
+
+// postureScalar converts a string value from an old posture block to the
+// JSON scalar the API takes for kind. See policy_posture_v0.go.
 func postureScalar(kind postureKind, value string) (any, error) {
 	switch kind {
 	case postureKindBool:
@@ -467,171 +747,16 @@ func postureScalar(kind postureKind, value string) (any, error) {
 		return value == "true", nil
 	case postureKindInteger:
 		i, err := strconv.ParseInt(value, 10, 64)
-		if err != nil || strconv.FormatInt(i, 10) != value {
-			return nil, fmt.Errorf("value must be a whole number such as \"40\" for an integer field; got %q", value)
+		if err != nil {
+			return nil, fmt.Errorf("value must be a whole number for an integer field; got %q", value)
 		}
 		return i, nil
 	case postureKindFloat:
 		f, err := strconv.ParseFloat(value, 64)
-		if err != nil || strconv.FormatFloat(f, 'f', -1, 64) != value {
-			return nil, fmt.Errorf("value must be a number in its shortest form, such as \"0.5\", for a float field; got %q", value)
+		if err != nil {
+			return nil, fmt.Errorf("value must be a number for a float field; got %q", value)
 		}
 		return f, nil
 	}
 	return value, nil
-}
-
-// postureToList converts an SDK expression to the posture block value.
-// A nil expression is a null list.
-func postureToList(node *firezone.PostureNode) (types.List, fwDiagnostics) {
-	var diags fwDiagnostics
-	elemType := types.ObjectType{AttrTypes: postureGroupAttrTypes(postureGroupLevels)}
-	if node == nil {
-		return types.ListNull(elemType), diags
-	}
-
-	group, err := postureGroupFromNode(*node, postureGroupLevels)
-	if err != nil {
-		diags.AddError("Unsupported Device Posture",
-			"The Policy's device posture cannot be written as firezone_policy posture blocks: "+err.Error()+
-				" Change the posture in the portal, or manage it with a shape the provider supports.")
-		return types.ListNull(elemType), diags
-	}
-
-	list, d := types.ListValue(elemType, []attr.Value{group})
-	diags.Append(d...)
-	return list, diags
-}
-
-// postureGroupFromNode converts an and/or/not node to a group object
-// that may nest levels-1 further groups. A bare check or a negated check
-// - both of which a group can only hold as a child - is wrapped in an and
-// group, which means the same thing.
-func postureGroupFromNode(node firezone.PostureNode, levels int) (types.Object, error) {
-	if levels < 1 {
-		return types.ObjectNull(nil), fmt.Errorf("it nests deeper than the provider's %d groups", postureGroupLevels)
-	}
-
-	negate := false
-	if node.Not != nil {
-		inner := *node.Not
-		if inner.And == nil && inner.Or == nil {
-			if inner.Not != nil {
-				return types.ObjectNull(nil), fmt.Errorf("it negates a negation")
-			}
-			// not(check): a negated group holding only the check.
-			return postureBuildGroup("and", true, []firezone.PostureNode{inner}, levels)
-		}
-		negate = true
-		node = inner
-	}
-
-	switch {
-	case node.And != nil:
-		return postureBuildGroup("and", negate, node.And, levels)
-	case node.Or != nil:
-		return postureBuildGroup("or", negate, node.Or, levels)
-	default:
-		// A bare check at the root.
-		return postureBuildGroup("and", false, []firezone.PostureNode{node}, levels)
-	}
-}
-
-func postureBuildGroup(operator string, negate bool, children []firezone.PostureNode, levels int) (types.Object, error) {
-	checkType := types.ObjectType{AttrTypes: postureCheckAttrTypes}
-	groupType := types.ObjectType{AttrTypes: postureGroupAttrTypes(levels - 1)}
-
-	var checks, groups []attr.Value
-	for _, child := range children {
-		if child.And == nil && child.Or == nil && child.Not == nil {
-			check, err := postureCheckFromNode(child)
-			if err != nil {
-				return types.ObjectNull(nil), err
-			}
-			checks = append(checks, check)
-			continue
-		}
-		group, err := postureGroupFromNode(child, levels-1)
-		if err != nil {
-			return types.ObjectNull(nil), err
-		}
-		groups = append(groups, group)
-	}
-
-	attrs := map[string]attr.Value{
-		"operator": types.StringValue(operator),
-		"negate":   types.BoolValue(negate),
-		"check":    postureListOrNull(checkType, checks),
-	}
-	if levels > 1 {
-		attrs["group"] = postureListOrNull(groupType, groups)
-	} else if len(groups) > 0 {
-		return types.ObjectNull(nil), fmt.Errorf("it nests deeper than the provider's %d groups", postureGroupLevels)
-	}
-
-	obj, diags := types.ObjectValue(postureGroupAttrTypes(levels), attrs)
-	if diags.HasError() {
-		return types.ObjectNull(nil), fmt.Errorf("internal error building a group: %s", diags[0].Detail())
-	}
-	return obj, nil
-}
-
-func postureListOrNull(elemType attr.Type, elems []attr.Value) types.List {
-	if len(elems) == 0 {
-		return types.ListNull(elemType)
-	}
-	return types.ListValueMust(elemType, elems)
-}
-
-// postureCheckFromNode converts a leaf to a check object.
-func postureCheckFromNode(leaf firezone.PostureNode) (types.Object, error) {
-	value := types.StringNull()
-	values := types.ListNull(types.StringType)
-
-	switch v := leaf.Value.(type) {
-	case nil:
-	case string:
-		value = types.StringValue(v)
-	case bool:
-		value = types.StringValue(strconv.FormatBool(v))
-	case float64:
-		value = types.StringValue(strconv.FormatFloat(v, 'f', -1, 64))
-	case int64:
-		value = types.StringValue(strconv.FormatInt(v, 10))
-	case []string:
-		list, d := types.ListValueFrom(context.Background(), types.StringType, v)
-		if d.HasError() {
-			return types.ObjectNull(nil), fmt.Errorf("%s has unreadable values", leaf.Field)
-		}
-		values = list
-	case []any:
-		items := make([]attr.Value, 0, len(v))
-		for _, item := range v {
-			s, ok := item.(string)
-			if !ok {
-				return types.ObjectNull(nil), fmt.Errorf("%s has a non-string list item", leaf.Field)
-			}
-			items = append(items, types.StringValue(s))
-		}
-		values = types.ListValueMust(types.StringType, items)
-	default:
-		return types.ObjectNull(nil), fmt.Errorf("%s has a value of unexpected type %T", leaf.Field, v)
-	}
-
-	rows := "any"
-	if leaf.Rows == firezone.PostureRowsAll {
-		rows = "all"
-	}
-
-	obj, diags := types.ObjectValue(postureCheckAttrTypes, map[string]attr.Value{
-		"field":    types.StringValue(leaf.Field),
-		"operator": types.StringValue(string(leaf.Operator)),
-		"value":    value,
-		"values":   values,
-		"rows":     types.StringValue(rows),
-	})
-	if diags.HasError() {
-		return types.ObjectNull(nil), fmt.Errorf("internal error building a check: %s", diags[0].Detail())
-	}
-	return obj, nil
 }

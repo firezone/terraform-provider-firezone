@@ -31,6 +31,7 @@ var (
 	_ resource.ResourceWithImportState    = &policyResource{}
 	_ resource.ResourceWithConfigure      = &policyResource{}
 	_ resource.ResourceWithValidateConfig = &policyResource{}
+	_ resource.ResourceWithUpgradeState   = &policyResource{}
 )
 
 // validOperatorsForProperty mirrors
@@ -86,7 +87,7 @@ type policyResourceModel struct {
 	Enabled               types.Bool             `tfsdk:"enabled"`
 	RequireAttestation    types.Bool             `tfsdk:"require_attestation"`
 	Condition             []policyConditionModel `tfsdk:"condition"`
-	Posture               types.List             `tfsdk:"posture"`
+	Posture               postureValue           `tfsdk:"posture"`
 }
 
 func (r *policyResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -95,6 +96,8 @@ func (r *policyResource) Metadata(_ context.Context, req resource.MetadataReques
 
 func (r *policyResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
+		// Version 1 replaced the posture block with the posture attribute.
+		Version: 1,
 		Description: "A Policy - grants a Group access to a Resource, optionally restricted by conditions.\n\n" +
 			"At most one Policy may exist per (group_id, resource_id) pair. To grant a Group access " +
 			"to several Resources, write one Policy per Resource; to grant several Groups access to " +
@@ -152,6 +155,7 @@ func (r *policyResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 					"Posture checks then match only identifiers proved by that certificate. Setting true " +
 					"fails if the account has no trust anchor. Replaces the device_attested condition.",
 			},
+			"posture": postureAttribute(),
 		},
 		Blocks: map[string]schema.Block{
 			"condition": schema.ListNestedBlock{
@@ -201,8 +205,17 @@ func (r *policyResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 					},
 				},
 			},
-			"posture": postureBlock(),
 		},
+	}
+}
+
+// UpgradeState rewrites state from before the posture attribute.
+func (r *policyResource) UpgradeState(ctx context.Context) map[int64]resource.StateUpgrader {
+	var current resource.SchemaResponse
+	r.Schema(ctx, resource.SchemaRequest{}, &current)
+	prior := policySchemaV0(current.Schema)
+	return map[int64]resource.StateUpgrader{
+		0: {PriorSchema: &prior, StateUpgrader: upgradePolicyStateV0},
 	}
 }
 
@@ -220,7 +233,7 @@ func (r *policyResource) ValidateConfig(ctx context.Context, req resource.Valida
 		return
 	}
 
-	_, postureDiags := postureFromList(config.Posture)
+	_, postureDiags := postureFromValue(config.Posture)
 	resp.Diagnostics.Append(postureDiags...)
 
 	// Records the index of the first condition seen for each property,
@@ -514,7 +527,7 @@ func (r *policyResource) Create(ctx context.Context, req resource.CreateRequest,
 		return
 	}
 
-	postures, postureDiags := postureFromList(plan.Posture)
+	postures, postureDiags := postureFromValue(plan.Posture)
 	resp.Diagnostics.Append(postureDiags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -587,15 +600,16 @@ func (r *policyResource) Update(ctx context.Context, req resource.UpdateRequest,
 	}
 
 	// Changing postures revokes the Policy's active authorizations, so
-	// send them only when they changed, never as a no-op on every update.
+	// send them only when the expression changed - not on every update,
+	// and not when only its spelling did, as after an import.
 	var state policyResourceModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 	var postures *firezone.Null[firezone.PostureNode]
-	if !plan.Posture.Equal(state.Posture) {
-		node, postureDiags := postureFromList(plan.Posture)
+	if !postureEqual(plan.Posture, state.Posture) {
+		node, postureDiags := postureFromValue(plan.Posture)
 		resp.Diagnostics.Append(postureDiags...)
 		if resp.Diagnostics.HasError() {
 			return
@@ -669,9 +683,12 @@ func policyModelFromAPI(ctx context.Context, pol *firezone.Policy, model *policy
 	conditions, diags := conditionsToModel(ctx, pol.Conditions)
 	model.Condition = conditions
 
-	posture, postureDiags := postureToList(pol.Postures)
+	posture, err := postureToValue(pol.Postures)
+	if err != nil {
+		diags.AddError("Unsupported Device Posture",
+			"The Policy's device posture cannot be read: "+err.Error())
+	}
 	model.Posture = posture
-	diags.Append(postureDiags...)
 	return diags
 }
 
