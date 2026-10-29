@@ -1,6 +1,6 @@
 // Package provider implements the Firezone Terraform provider. It is
-// intentionally unexported/unimportable - nothing outside main.go
-// should depend on it.
+// intentionally unexported/unimportable - nothing outside main.go and
+// pkg/provider should depend on it.
 package provider
 
 import (

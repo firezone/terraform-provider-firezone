@@ -16,6 +16,12 @@ are listed under `### Changed`, with a note on what to do about them. From
 
 ## [Unreleased]
 
+### Added
+
+- `pkg/provider` Go package with `New(version)`, which returns a
+  provider factory for in-process use, e.g. by Upjet-based Crossplane
+  providers.
+
 ## [0.3.0] - 2026-10-26
 
 ### Changed
