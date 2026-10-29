@@ -16,6 +16,8 @@ are listed under `### Changed`, with a note on what to do about them. From
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-29
+
 ### Changed
 
 - **Breaking:** `firezone_policy` takes `posture` as an attribute holding
@@ -92,6 +94,10 @@ are listed under `### Changed`, with a note on what to do about them. From
   provider factory for in-process use, e.g. by Upjet-based Crossplane
   providers.
 
+### Security
+
+- Update `golang.org/x/net` to v0.62.0 for GO-2026-6860 and GO-2026-6866.
+
 ## [0.3.0] - 2026-10-26
 
 ### Changed
@@ -153,5 +159,6 @@ are listed under `### Changed`, with a note on what to do about them. From
 - `internal/genposture` writes the generated posture file with 0600
   permissions.
 
-[Unreleased]: https://github.com/firezone/terraform-provider-firezone/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/firezone/terraform-provider-firezone/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/firezone/terraform-provider-firezone/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/firezone/terraform-provider-firezone/compare/v0.2.0...v0.3.0
