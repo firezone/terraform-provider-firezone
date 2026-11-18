@@ -227,20 +227,35 @@ func (r *policyResource) UpgradeState(ctx context.Context) map[int64]resource.St
 // Without this the mistake surfaces as a 422 at apply time, after
 // earlier resources in the same apply have already been created.
 func (r *policyResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
-	var config policyResourceModel
-	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
+	// Read only what is checked here, with condition as a types.List: a
+	// dynamic block under for_each makes it unknown during validation,
+	// and a Go slice cannot hold an unknown value. See
+	// https://github.com/firezone/terraform-provider-firezone/issues/29.
+	var posture postureValue
+	var conditionList types.List
+	resp.Diagnostics.Append(req.Config.GetAttribute(ctx, path.Root("posture"), &posture)...)
+	resp.Diagnostics.Append(req.Config.GetAttribute(ctx, path.Root("condition"), &conditionList)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	_, postureDiags := postureFromValue(config.Posture)
+	_, postureDiags := postureFromValue(posture)
 	resp.Diagnostics.Append(postureDiags...)
+
+	if conditionList.IsUnknown() || conditionList.IsNull() {
+		return
+	}
+	var conditions []policyConditionModel
+	resp.Diagnostics.Append(conditionList.ElementsAs(ctx, &conditions, false)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
 
 	// Records the index of the first condition seen for each property,
 	// so a later duplicate can point back at it.
-	seen := make(map[string]int, len(config.Condition))
+	seen := make(map[string]int, len(conditions))
 
-	for i, condition := range config.Condition {
+	for i, condition := range conditions {
 		// Either value can come from an expression unresolved until
 		// apply. Defer rather than guess - the API still enforces this.
 		if condition.Property.IsUnknown() || condition.Operator.IsUnknown() {
