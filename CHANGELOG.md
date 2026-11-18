@@ -16,6 +16,14 @@ are listed under `### Changed`, with a note on what to do about them. From
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-18
+
+### Fixed
+
+- `firezone_resource` and `firezone_policy` no longer fail to plan with a
+  "Value Conversion Error" when `filters` or `condition` blocks come from a
+  `dynamic` block in a resource that uses `for_each`. (#29)
+
 ## [0.4.0] - 2026-10-29
 
 ### Changed
@@ -159,6 +167,7 @@ are listed under `### Changed`, with a note on what to do about them. From
 - `internal/genposture` writes the generated posture file with 0600
   permissions.
 
-[Unreleased]: https://github.com/firezone/terraform-provider-firezone/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/firezone/terraform-provider-firezone/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/firezone/terraform-provider-firezone/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/firezone/terraform-provider-firezone/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/firezone/terraform-provider-firezone/compare/v0.2.0...v0.3.0
