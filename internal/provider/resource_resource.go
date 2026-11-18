@@ -168,8 +168,7 @@ func (r *resourceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 // the API silently discards it, so the apply succeeds while state
 // records a Site the server never stored.
 func (r *resourceResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
-	var config resourceResourceModel
-	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
+	config := resourceAttributesWithoutFilters(ctx, req.Config, &resp.Diagnostics)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -224,15 +223,40 @@ func (r *resourceResource) ValidateConfig(ctx context.Context, req resource.Vali
 	}
 }
 
+// attributeGetter is implemented by tfsdk.Config, tfsdk.Plan and
+// tfsdk.State.
+type attributeGetter interface {
+	GetAttribute(ctx context.Context, p path.Path, target interface{}) fwDiagnostics
+}
+
+// resourceAttributesWithoutFilters reads every attribute except filters.
+//
+// ValidateConfig and ModifyPlan never look at filters, and reading the
+// whole model with Get fails when filters is unknown: a dynamic block
+// under for_each expands to an unknown list during validation and
+// planning, and a Go slice cannot hold an unknown value. See
+// https://github.com/firezone/terraform-provider-firezone/issues/29.
+func resourceAttributesWithoutFilters(ctx context.Context, src attributeGetter, diags *fwDiagnostics) resourceResourceModel {
+	var m resourceResourceModel
+	diags.Append(src.GetAttribute(ctx, path.Root("id"), &m.ID)...)
+	diags.Append(src.GetAttribute(ctx, siteIDPath, &m.SiteID)...)
+	diags.Append(src.GetAttribute(ctx, path.Root("name"), &m.Name)...)
+	diags.Append(src.GetAttribute(ctx, path.Root("type"), &m.Type)...)
+	diags.Append(src.GetAttribute(ctx, path.Root("address"), &m.Address)...)
+	diags.Append(src.GetAttribute(ctx, path.Root("address_description"), &m.AddressDescription)...)
+	diags.Append(src.GetAttribute(ctx, ipStackPath, &m.IPStack)...)
+	diags.Append(src.GetAttribute(ctx, path.Root("device_membership_criteria"), &m.DeviceMembershipCriteria)...)
+	return m
+}
+
 // ModifyPlan clears criteria when converting away from a pool. For a conversion
 // into a pool with unmanaged membership, Create/Update initializes an empty list.
 func (r *resourceResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
 	if req.Plan.Raw.IsNull() {
 		return
 	}
-	var plan, config resourceResourceModel
-	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
-	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
+	plan := resourceAttributesWithoutFilters(ctx, req.Plan, &resp.Diagnostics)
+	config := resourceAttributesWithoutFilters(ctx, req.Config, &resp.Diagnostics)
 	if resp.Diagnostics.HasError() || plan.Type.IsUnknown() {
 		return
 	}
@@ -246,8 +270,7 @@ func (r *resourceResource) ModifyPlan(ctx context.Context, req resource.ModifyPl
 	if plan.Type.ValueString() != resourceTypeDevicePool {
 		resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, p, types.ObjectNull(criteriaAttributeTypes))...)
 	} else if !req.State.Raw.IsNull() {
-		var state resourceResourceModel
-		resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+		state := resourceAttributesWithoutFilters(ctx, req.State, &resp.Diagnostics)
 		if state.Type.ValueString() != resourceTypeDevicePool {
 			resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, p, types.ObjectUnknown(criteriaAttributeTypes))...)
 		}
@@ -352,8 +375,7 @@ func (r *resourceResource) Update(ctx context.Context, req resource.UpdateReques
 		criteria, criteriaDiags = criteriaToAPI(ctx, plan.DeviceMembershipCriteria)
 		resp.Diagnostics.Append(criteriaDiags...)
 	} else if plan.Type.ValueString() == resourceTypeDevicePool {
-		var state resourceResourceModel
-		resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+		state := resourceAttributesWithoutFilters(ctx, req.State, &resp.Diagnostics)
 		if state.Type.ValueString() != resourceTypeDevicePool {
 			criteria = emptyListedCriteria
 		}
